@@ -2,6 +2,7 @@ import { UserProgressRepository } from '../../ports/repositories/UserProgressRep
 import { ReadingRepository } from '../../ports/repositories/ReadingRepository';
 import { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
 import { AppError } from '../../../core/errors/AppError';
+import { TrackLearningActivityUseCase } from '../streak/TrackLearningActivityUseCase';
 
 interface TrackReadingLookupInput {
   userId: string;
@@ -15,7 +16,8 @@ export class TrackReadingLookupUseCase {
   constructor(
     private userProgressRepository: UserProgressRepository,
     private readingRepository: ReadingRepository,
-    private vocabularyRepository: VocabularyRepository
+    private vocabularyRepository: VocabularyRepository,
+    private trackLearningActivityUseCase: TrackLearningActivityUseCase
   ) {}
 
   async execute(input: TrackReadingLookupInput): Promise<void> {
@@ -36,6 +38,12 @@ export class TrackReadingLookupUseCase {
       readingSpanId: input.readingSpanId,
       lookupText: input.lookupText,
       lookedUpAt: new Date(),
+    });
+
+    // Track learning activity
+    await this.trackLearningActivityUseCase.execute({
+      userId: input.userId,
+      activityType: 'VOCAB_LOOKUP'
     });
   }
 }

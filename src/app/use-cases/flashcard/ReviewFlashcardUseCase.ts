@@ -1,7 +1,7 @@
 import { UserProgressRepository } from '../../ports/repositories/UserProgressRepository';
 import { ReviewScheduler } from '../../ports/services/ReviewScheduler';
 import { UserWordProgress } from '../../../core/entities/UserWordProgress';
-import { AppError } from '../../../core/errors/AppError';
+import { TrackLearningActivityUseCase } from '../streak/TrackLearningActivityUseCase';
 
 interface ReviewFlashcardInput {
   userId: string;
@@ -14,7 +14,8 @@ interface ReviewFlashcardInput {
 export class ReviewFlashcardUseCase {
   constructor(
     private userProgressRepository: UserProgressRepository,
-    private reviewScheduler: ReviewScheduler
+    private reviewScheduler: ReviewScheduler,
+    private trackLearningActivityUseCase: TrackLearningActivityUseCase
   ) {}
 
   async execute(input: ReviewFlashcardInput): Promise<UserWordProgress> {
@@ -55,10 +56,18 @@ export class ReviewFlashcardUseCase {
       updateData.status = 'difficult';
     }
 
-    return this.userProgressRepository.saveWordProgress(
+    const progress = await this.userProgressRepository.saveWordProgress(
       input.userId,
       input.vocabularyId,
       updateData
     );
+
+    // Track learning activity
+    await this.trackLearningActivityUseCase.execute({
+      userId: input.userId,
+      activityType: 'FLASHCARD_REVIEWED'
+    });
+
+    return progress;
   }
 }

@@ -4,6 +4,7 @@ import { JwtAuthTokenService } from '../../infrastructure/auth/JwtAuthTokenServi
 import { RegisterUseCase } from '../../app/use-cases/auth/RegisterUseCase';
 import { LoginUseCase } from '../../app/use-cases/auth/LoginUseCase';
 import { GetCurrentUserUseCase } from '../../app/use-cases/auth/GetCurrentUserUseCase';
+import { ForgotPasswordUseCase } from '../../app/use-cases/auth/ForgotPasswordUseCase';
 import { AuthController } from '../../interfaces/http/controllers/AuthController';
 
 // Topic imports
@@ -51,6 +52,11 @@ import { AddCardToDeckUseCase } from '../../app/use-cases/flashcard/AddCardToDec
 import { ReviewFlashcardUseCase } from '../../app/use-cases/flashcard/ReviewFlashcardUseCase';
 import { FlashcardController } from '../../interfaces/http/controllers/FlashcardController';
 
+// Streak imports
+import { GetStreakUseCase } from '../../app/use-cases/streak/GetStreakUseCase';
+import { TrackLearningActivityUseCase } from '../../app/use-cases/streak/TrackLearningActivityUseCase';
+import { StreakController } from '../../interfaces/http/controllers/StreakController';
+
 let containerInstance: any = null;
 
 export function buildContainer() {
@@ -70,6 +76,10 @@ export function buildContainer() {
   const passwordAuthProvider = new PasswordAuthProviderImpl();
   const authTokenService = new JwtAuthTokenService();
 
+  // Streak Use Cases (Instantiated early for injection)
+  const getStreakUseCase = new GetStreakUseCase();
+  const trackLearningActivityUseCase = new TrackLearningActivityUseCase();
+
   // Auth Use Cases & Controller
   const registerUseCase = new RegisterUseCase(
     userRepository,
@@ -85,10 +95,16 @@ export function buildContainer() {
 
   const getCurrentUserUseCase = new GetCurrentUserUseCase(userRepository);
 
+  const forgotPasswordUseCase = new ForgotPasswordUseCase(
+    userRepository,
+    passwordAuthProvider
+  );
+
   const authController = new AuthController(
     registerUseCase,
     loginUseCase,
-    getCurrentUserUseCase
+    getCurrentUserUseCase,
+    forgotPasswordUseCase
   );
 
   // Topic Use Cases & Controller
@@ -115,15 +131,18 @@ export function buildContainer() {
   const deleteVocabularyUseCase = new DeleteVocabularyUseCase(vocabularyRepository);
   const saveVocabularyUseCase = new SaveVocabularyUseCase(
     userProgressRepository,
-    vocabularyRepository
+    vocabularyRepository,
+    trackLearningActivityUseCase
   );
   const markVocabularyKnownUseCase = new MarkVocabularyKnownUseCase(
     userProgressRepository,
-    vocabularyRepository
+    vocabularyRepository,
+    trackLearningActivityUseCase
   );
   const markVocabularyDifficultUseCase = new MarkVocabularyDifficultUseCase(
     userProgressRepository,
-    vocabularyRepository
+    vocabularyRepository,
+    trackLearningActivityUseCase
   );
 
   const vocabularyController = new VocabularyController(
@@ -163,11 +182,13 @@ export function buildContainer() {
   const trackReadingLookupUseCase = new TrackReadingLookupUseCase(
     userProgressRepository,
     readingRepository,
-    vocabularyRepository
+    vocabularyRepository,
+    trackLearningActivityUseCase
   );
   const updateReadingProgressUseCase = new UpdateReadingProgressUseCase(
     userProgressRepository,
-    readingRepository
+    readingRepository,
+    trackLearningActivityUseCase
   );
 
   const readingController = new ReadingController(
@@ -188,11 +209,13 @@ export function buildContainer() {
   const addCardToDeckUseCase = new AddCardToDeckUseCase(
     deckRepository,
     cardRepository,
-    vocabularyRepository
+    vocabularyRepository,
+    trackLearningActivityUseCase
   );
   const reviewFlashcardUseCase = new ReviewFlashcardUseCase(
     userProgressRepository,
-    reviewScheduler
+    reviewScheduler,
+    trackLearningActivityUseCase
   );
 
   const flashcardController = new FlashcardController(
@@ -203,12 +226,17 @@ export function buildContainer() {
     reviewFlashcardUseCase
   );
 
+  // Streak Controller (Use cases instantiated at the top)
+  const streakController = new StreakController(getStreakUseCase, trackLearningActivityUseCase);
+
   containerInstance = {
     authController,
     topicController,
     vocabularyController,
     readingController,
     flashcardController,
+    streakController,
+    trackLearningActivityUseCase,
     userRepository,
     topicRepository,
     vocabularyRepository,

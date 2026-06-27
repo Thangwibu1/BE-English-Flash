@@ -7,6 +7,7 @@ import { readingRoutes } from './interfaces/http/routes/reading.routes';
 import { flashcardRoutes } from './interfaces/http/routes/flashcard.routes';
 import { topicRoutes } from './interfaces/http/routes/topic.routes';
 import { contributionRoutes } from './interfaces/http/routes/contribution.routes';
+import { streakRoutes } from './interfaces/http/routes/streak.routes';
 import { authMiddleware } from './interfaces/http/middlewares/authMiddleware';
 import { buildContainer } from './shared/container/buildContainer';
 
@@ -40,6 +41,7 @@ export function createApp() {
   app.use('/api/flashcard-decks', flashcardRoutes);
   app.use('/api/topics', topicRoutes);
   app.use('/api/contributions', contributionRoutes);
+  app.use('/api', streakRoutes);
 
   // Global Error Handler
   app.use(errorMiddleware);

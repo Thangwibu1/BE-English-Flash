@@ -2,6 +2,7 @@ import { UserProgressRepository } from '../../ports/repositories/UserProgressRep
 import { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
 import { UserWordProgress } from '../../../core/entities/UserWordProgress';
 import { AppError } from '../../../core/errors/AppError';
+import { TrackLearningActivityUseCase } from '../streak/TrackLearningActivityUseCase';
 
 interface MarkVocabularyDifficultInput {
   userId: string;
@@ -11,7 +12,8 @@ interface MarkVocabularyDifficultInput {
 export class MarkVocabularyDifficultUseCase {
   constructor(
     private userProgressRepository: UserProgressRepository,
-    private vocabularyRepository: VocabularyRepository
+    private vocabularyRepository: VocabularyRepository,
+    private trackLearningActivityUseCase: TrackLearningActivityUseCase
   ) {}
 
   async execute(input: MarkVocabularyDifficultInput): Promise<UserWordProgress> {
@@ -25,6 +27,14 @@ export class MarkVocabularyDifficultUseCase {
       markedDifficultAt: new Date(),
     };
 
-    return this.userProgressRepository.saveWordProgress(input.userId, input.vocabularyId, updateData);
+    const progress = await this.userProgressRepository.saveWordProgress(input.userId, input.vocabularyId, updateData);
+
+    // Track learning activity
+    await this.trackLearningActivityUseCase.execute({
+      userId: input.userId,
+      activityType: 'WORD_MARKED_DIFFICULT'
+    });
+
+    return progress;
   }
 }

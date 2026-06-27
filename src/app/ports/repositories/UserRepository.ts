@@ -8,4 +8,5 @@ export interface UserRepository {
   findWithPasswordHashByEmailOrUsername(identifier: string): Promise<{ user: User; passwordHash: string } | null>;
   create(user: Partial<User> & { passwordHash: string }): Promise<User>;
   update(id: string, user: Partial<User>): Promise<User | null>;
+  updatePasswordHash(id: string, passwordHash: string): Promise<void>;
 }

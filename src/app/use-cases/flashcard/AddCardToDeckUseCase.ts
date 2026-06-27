@@ -3,6 +3,7 @@ import { FlashcardCardRepository } from '../../ports/repositories/FlashcardCardR
 import { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
 import { FlashcardCard } from '../../../core/entities/FlashcardCard';
 import { AppError } from '../../../core/errors/AppError';
+import { TrackLearningActivityUseCase } from '../streak/TrackLearningActivityUseCase';
 
 interface AddCardToDeckInput {
   deckId: string;
@@ -14,7 +15,8 @@ export class AddCardToDeckUseCase {
   constructor(
     private deckRepository: FlashcardDeckRepository,
     private cardRepository: FlashcardCardRepository,
-    private vocabularyRepository: VocabularyRepository
+    private vocabularyRepository: VocabularyRepository,
+    private trackLearningActivityUseCase: TrackLearningActivityUseCase
   ) {}
 
   async execute(input: AddCardToDeckInput): Promise<FlashcardCard> {
@@ -62,6 +64,12 @@ export class AddCardToDeckUseCase {
     // Update deck card count
     await this.deckRepository.update(input.deckId, {
       cardCount: deck.cardCount + 1,
+    });
+
+    // Track learning activity
+    await this.trackLearningActivityUseCase.execute({
+      userId: input.userId,
+      activityType: 'CARD_CREATED'
     });
 
     return card;

@@ -2,12 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { RegisterUseCase } from '../../../app/use-cases/auth/RegisterUseCase';
 import { LoginUseCase } from '../../../app/use-cases/auth/LoginUseCase';
 import { GetCurrentUserUseCase } from '../../../app/use-cases/auth/GetCurrentUserUseCase';
+import { ForgotPasswordUseCase } from '../../../app/use-cases/auth/ForgotPasswordUseCase';
 
 export class AuthController {
   constructor(
     private registerUseCase: RegisterUseCase,
     private loginUseCase: LoginUseCase,
-    private getCurrentUserUseCase: GetCurrentUserUseCase
+    private getCurrentUserUseCase: GetCurrentUserUseCase,
+    private forgotPasswordUseCase: ForgotPasswordUseCase
   ) {}
 
   register = async (req: Request, res: Response, next: NextFunction) => {
@@ -94,6 +96,20 @@ export class AuthController {
       res.status(200).json({
         success: true,
         message: 'Logged out successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { identifier, newPassword, confirmPassword } = req.body;
+      await this.forgotPasswordUseCase.execute({ identifier, newPassword, confirmPassword });
+
+      res.status(200).json({
+        success: true,
+        message: 'Password updated successfully',
       });
     } catch (error) {
       next(error);

@@ -66,4 +66,11 @@ export class MongoUserRepository implements UserRepository {
     );
     return doc ? mapUserDocToEntity(doc) : null;
   }
+
+  async updatePasswordHash(id: string, passwordHash: string): Promise<void> {
+    await UserModel.findOneAndUpdate(
+      { _id: id, deletedAt: null },
+      { $set: { passwordHash } }
+    );
+  }
 }
