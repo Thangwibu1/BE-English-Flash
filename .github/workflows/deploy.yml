@@ -1,0 +1,45 @@
+name: Deploy Backend to Coolify
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-and-verify:
+    name: Verify & Compile Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify TypeScript Build
+        run: npm run build
+
+  deploy:
+    name: Trigger Coolify Deploy
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify Webhook
+        run: |
+          if [ -z "${{ secrets.COOLIFY_WEBHOOK_URL }}" ]; then
+            echo "Error: COOLIFY_WEBHOOK_URL is not set."
+            exit 1
+          fi
+          
+          echo "Triggering deployment..."
+          curl -i -X POST \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}" \
+            "${{ secrets.COOLIFY_WEBHOOK_URL }}"
