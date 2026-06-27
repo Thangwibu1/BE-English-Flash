@@ -1,0 +1,224 @@
+import { MongoUserRepository } from '../../infrastructure/database/mongoose/repositories/MongoUserRepository';
+import { PasswordAuthProviderImpl } from '../../infrastructure/auth/PasswordAuthProviderImpl';
+import { JwtAuthTokenService } from '../../infrastructure/auth/JwtAuthTokenService';
+import { RegisterUseCase } from '../../app/use-cases/auth/RegisterUseCase';
+import { LoginUseCase } from '../../app/use-cases/auth/LoginUseCase';
+import { GetCurrentUserUseCase } from '../../app/use-cases/auth/GetCurrentUserUseCase';
+import { AuthController } from '../../interfaces/http/controllers/AuthController';
+
+// Topic imports
+import { MongoTopicRepository } from '../../infrastructure/database/mongoose/repositories/MongoTopicRepository';
+import { ListTopicsUseCase } from '../../app/use-cases/topic/ListTopicsUseCase';
+import { CreateTopicUseCase } from '../../app/use-cases/topic/CreateTopicUseCase';
+import { UpdateTopicUseCase } from '../../app/use-cases/topic/UpdateTopicUseCase';
+import { DeleteTopicUseCase } from '../../app/use-cases/topic/DeleteTopicUseCase';
+import { TopicController } from '../../interfaces/http/controllers/TopicController';
+
+// Vocabulary imports
+import { MongoVocabularyRepository } from '../../infrastructure/database/mongoose/repositories/MongoVocabularyRepository';
+import { MongoUserProgressRepository } from '../../infrastructure/database/mongoose/repositories/MongoUserProgressRepository';
+import { ListVocabulariesUseCase } from '../../app/use-cases/vocabulary/ListVocabulariesUseCase';
+import { GetVocabularyDetailUseCase } from '../../app/use-cases/vocabulary/GetVocabularyDetailUseCase';
+import { CreateVocabularyUseCase } from '../../app/use-cases/vocabulary/CreateVocabularyUseCase';
+import { UpdateVocabularyUseCase } from '../../app/use-cases/vocabulary/UpdateVocabularyUseCase';
+import { DeleteVocabularyUseCase } from '../../app/use-cases/vocabulary/DeleteVocabularyUseCase';
+import { SaveVocabularyUseCase } from '../../app/use-cases/vocabulary/SaveVocabularyUseCase';
+import { MarkVocabularyKnownUseCase } from '../../app/use-cases/vocabulary/MarkVocabularyKnownUseCase';
+import { MarkVocabularyDifficultUseCase } from '../../app/use-cases/vocabulary/MarkVocabularyDifficultUseCase';
+import { VocabularyController } from '../../interfaces/http/controllers/VocabularyController';
+
+// Reading imports
+import { MongoReadingRepository } from '../../infrastructure/database/mongoose/repositories/MongoReadingRepository';
+import { SimpleReadingPreprocessor } from '../../infrastructure/services/SimpleReadingPreprocessor';
+import { ListReadingsUseCase } from '../../app/use-cases/reading/ListReadingsUseCase';
+import { GetReadingDetailUseCase } from '../../app/use-cases/reading/GetReadingDetailUseCase';
+import { CreateReadingUseCase } from '../../app/use-cases/reading/CreateReadingUseCase';
+import { UpdateReadingUseCase } from '../../app/use-cases/reading/UpdateReadingUseCase';
+import { DeleteReadingUseCase } from '../../app/use-cases/reading/DeleteReadingUseCase';
+import { ReprocessReadingUseCase } from '../../app/use-cases/reading/ReprocessReadingUseCase';
+import { TrackReadingLookupUseCase } from '../../app/use-cases/reading/TrackReadingLookupUseCase';
+import { UpdateReadingProgressUseCase } from '../../app/use-cases/reading/UpdateReadingProgressUseCase';
+import { ReadingController } from '../../interfaces/http/controllers/ReadingController';
+
+// Flashcard imports
+import { MongoFlashcardDeckRepository } from '../../infrastructure/database/mongoose/repositories/MongoFlashcardDeckRepository';
+import { MongoFlashcardCardRepository } from '../../infrastructure/database/mongoose/repositories/MongoFlashcardCardRepository';
+import { BasicReviewScheduler } from '../../infrastructure/services/BasicReviewScheduler';
+import { CreateDeckUseCase } from '../../app/use-cases/flashcard/CreateDeckUseCase';
+import { ListDecksUseCase } from '../../app/use-cases/flashcard/ListDecksUseCase';
+import { GetDeckDetailUseCase } from '../../app/use-cases/flashcard/GetDeckDetailUseCase';
+import { AddCardToDeckUseCase } from '../../app/use-cases/flashcard/AddCardToDeckUseCase';
+import { ReviewFlashcardUseCase } from '../../app/use-cases/flashcard/ReviewFlashcardUseCase';
+import { FlashcardController } from '../../interfaces/http/controllers/FlashcardController';
+
+let containerInstance: any = null;
+
+export function buildContainer() {
+  if (containerInstance) return containerInstance;
+
+  // Repositories & Services
+  const userRepository = new MongoUserRepository();
+  const topicRepository = new MongoTopicRepository();
+  const vocabularyRepository = new MongoVocabularyRepository();
+  const userProgressRepository = new MongoUserProgressRepository();
+  const readingRepository = new MongoReadingRepository();
+  const deckRepository = new MongoFlashcardDeckRepository();
+  const cardRepository = new MongoFlashcardCardRepository();
+  
+  const readingPreprocessor = new SimpleReadingPreprocessor();
+  const reviewScheduler = new BasicReviewScheduler();
+  const passwordAuthProvider = new PasswordAuthProviderImpl();
+  const authTokenService = new JwtAuthTokenService();
+
+  // Auth Use Cases & Controller
+  const registerUseCase = new RegisterUseCase(
+    userRepository,
+    passwordAuthProvider,
+    authTokenService
+  );
+
+  const loginUseCase = new LoginUseCase(
+    userRepository,
+    passwordAuthProvider,
+    authTokenService
+  );
+
+  const getCurrentUserUseCase = new GetCurrentUserUseCase(userRepository);
+
+  const authController = new AuthController(
+    registerUseCase,
+    loginUseCase,
+    getCurrentUserUseCase
+  );
+
+  // Topic Use Cases & Controller
+  const listTopicsUseCase = new ListTopicsUseCase(topicRepository);
+  const createTopicUseCase = new CreateTopicUseCase(topicRepository);
+  const updateTopicUseCase = new UpdateTopicUseCase(topicRepository);
+  const deleteTopicUseCase = new DeleteTopicUseCase(topicRepository);
+
+  const topicController = new TopicController(
+    listTopicsUseCase,
+    createTopicUseCase,
+    updateTopicUseCase,
+    deleteTopicUseCase
+  );
+
+  // Vocabulary Use Cases & Controller
+  const listVocabulariesUseCase = new ListVocabulariesUseCase(vocabularyRepository, userProgressRepository);
+  const getVocabularyDetailUseCase = new GetVocabularyDetailUseCase(
+    vocabularyRepository,
+    userProgressRepository
+  );
+  const createVocabularyUseCase = new CreateVocabularyUseCase(vocabularyRepository);
+  const updateVocabularyUseCase = new UpdateVocabularyUseCase(vocabularyRepository);
+  const deleteVocabularyUseCase = new DeleteVocabularyUseCase(vocabularyRepository);
+  const saveVocabularyUseCase = new SaveVocabularyUseCase(
+    userProgressRepository,
+    vocabularyRepository
+  );
+  const markVocabularyKnownUseCase = new MarkVocabularyKnownUseCase(
+    userProgressRepository,
+    vocabularyRepository
+  );
+  const markVocabularyDifficultUseCase = new MarkVocabularyDifficultUseCase(
+    userProgressRepository,
+    vocabularyRepository
+  );
+
+  const vocabularyController = new VocabularyController(
+    listVocabulariesUseCase,
+    getVocabularyDetailUseCase,
+    createVocabularyUseCase,
+    updateVocabularyUseCase,
+    deleteVocabularyUseCase,
+    saveVocabularyUseCase,
+    markVocabularyKnownUseCase,
+    markVocabularyDifficultUseCase
+  );
+
+  // Reading Use Cases & Controller
+  const listReadingsUseCase = new ListReadingsUseCase(readingRepository);
+  const getReadingDetailUseCase = new GetReadingDetailUseCase(
+    readingRepository,
+    vocabularyRepository,
+    userProgressRepository
+  );
+  const createReadingUseCase = new CreateReadingUseCase(
+    readingRepository,
+    vocabularyRepository,
+    readingPreprocessor
+  );
+  const updateReadingUseCase = new UpdateReadingUseCase(
+    readingRepository,
+    vocabularyRepository,
+    readingPreprocessor
+  );
+  const deleteReadingUseCase = new DeleteReadingUseCase(readingRepository);
+  const reprocessReadingUseCase = new ReprocessReadingUseCase(
+    readingRepository,
+    vocabularyRepository,
+    readingPreprocessor
+  );
+  const trackReadingLookupUseCase = new TrackReadingLookupUseCase(
+    userProgressRepository,
+    readingRepository,
+    vocabularyRepository
+  );
+  const updateReadingProgressUseCase = new UpdateReadingProgressUseCase(
+    userProgressRepository,
+    readingRepository
+  );
+
+  const readingController = new ReadingController(
+    listReadingsUseCase,
+    getReadingDetailUseCase,
+    createReadingUseCase,
+    updateReadingUseCase,
+    deleteReadingUseCase,
+    reprocessReadingUseCase,
+    trackReadingLookupUseCase,
+    updateReadingProgressUseCase
+  );
+
+  // Flashcard Use Cases & Controller
+  const createDeckUseCase = new CreateDeckUseCase(deckRepository);
+  const listDecksUseCase = new ListDecksUseCase(deckRepository);
+  const getDeckDetailUseCase = new GetDeckDetailUseCase(deckRepository, cardRepository);
+  const addCardToDeckUseCase = new AddCardToDeckUseCase(
+    deckRepository,
+    cardRepository,
+    vocabularyRepository
+  );
+  const reviewFlashcardUseCase = new ReviewFlashcardUseCase(
+    userProgressRepository,
+    reviewScheduler
+  );
+
+  const flashcardController = new FlashcardController(
+    createDeckUseCase,
+    listDecksUseCase,
+    getDeckDetailUseCase,
+    addCardToDeckUseCase,
+    reviewFlashcardUseCase
+  );
+
+  containerInstance = {
+    authController,
+    topicController,
+    vocabularyController,
+    readingController,
+    flashcardController,
+    userRepository,
+    topicRepository,
+    vocabularyRepository,
+    userProgressRepository,
+    readingRepository,
+    deckRepository,
+    cardRepository,
+    passwordAuthProvider,
+    authTokenService,
+  };
+
+  return containerInstance;
+}

@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: english-learning-backend
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    restart: always
