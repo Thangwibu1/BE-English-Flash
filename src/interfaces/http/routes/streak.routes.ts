@@ -7,5 +7,6 @@ const { streakController } = buildContainer();
 
 router.get('/me/streak', authMiddleware, streakController.getStreak);
 router.post('/me/activity', authMiddleware, streakController.trackActivity);
+router.get('/me/stats', authMiddleware, streakController.getStats);
 
 export { router as streakRoutes };
