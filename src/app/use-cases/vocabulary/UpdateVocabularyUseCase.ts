@@ -1,6 +1,7 @@
 import { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
 import { Vocabulary, VocabularyType, CEFRLevel } from '../../../core/entities/Vocabulary';
 import { normalizeText } from '../../../shared/utils/normalizeText';
+import { buildPrefixTokens } from '../../../shared/utils/buildPrefixTokens';
 import { AppError } from '../../../core/errors/AppError';
 
 interface UpdateVocabularyInput {
@@ -52,6 +53,10 @@ export class UpdateVocabularyUseCase {
           note: f.note,
         })),
       ];
+
+      // Regenerate searchTokens
+      const allFormTexts = updateData.forms.map((f) => f.formText);
+      updateData.searchTokens = buildPrefixTokens(allFormTexts.join(' '));
     } else if (input.forms !== undefined) {
       updateData.forms = [
         existing.forms[0], // Keep base form
@@ -62,6 +67,10 @@ export class UpdateVocabularyUseCase {
           note: f.note,
         })),
       ];
+
+      // Regenerate searchTokens
+      const allFormTexts = updateData.forms.map((f) => f.formText);
+      updateData.searchTokens = buildPrefixTokens(allFormTexts.join(' '));
     }
 
     if (input.type !== undefined) updateData.type = input.type as VocabularyType;

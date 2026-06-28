@@ -35,6 +35,7 @@ export function mapVocabularyDocToEntity(doc: VocabularyDocument): Vocabulary {
     })),
     topicIds: doc.topicIds.map((t) => t.toString()),
     status: doc.status,
+    searchTokens: doc.searchTokens || [],
     createdBy: doc.createdBy ? doc.createdBy.toString() : undefined,
     updatedBy: doc.updatedBy ? doc.updatedBy.toString() : undefined,
     createdAt: doc.createdAt,

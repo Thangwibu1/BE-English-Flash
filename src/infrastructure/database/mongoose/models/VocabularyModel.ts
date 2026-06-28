@@ -43,6 +43,7 @@ export interface VocabularyDocument extends Document {
   }[];
   topicIds: mongoose.Types.ObjectId[];
   status: 'draft' | 'approved' | 'rejected' | 'archived';
+  searchTokens?: string[];
   createdBy?: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
@@ -107,6 +108,7 @@ const VocabularySchema = new Schema<VocabularyDocument>(
       enum: ['draft', 'approved', 'rejected', 'archived'],
       default: 'approved',
     },
+    searchTokens: [{ type: String }],
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date, default: null },
@@ -122,12 +124,11 @@ VocabularySchema.index({ level: 1 });
 VocabularySchema.index({ topicIds: 1 });
 VocabularySchema.index({ status: 1 });
 VocabularySchema.index({ deletedAt: 1 });
-VocabularySchema.index({
-  text: 'text',
-  normalizedText: 'text',
-  'meanings.meaningVi': 'text',
-  'meanings.meaningEn': 'text',
-});
+VocabularySchema.index({ normalizedText: 1 });
+VocabularySchema.index({ 'forms.normalizedFormText': 1 });
+VocabularySchema.index({ status: 1, normalizedText: 1 });
+VocabularySchema.index({ status: 1, type: 1, level: 1 });
+VocabularySchema.index({ searchTokens: 1 });
 
 export const VocabularyModel = mongoose.model<VocabularyDocument>(
   'Vocabulary',

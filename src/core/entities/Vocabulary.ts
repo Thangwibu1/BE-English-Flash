@@ -48,6 +48,7 @@ export interface Vocabulary {
   components: VocabularyComponent[];
   topicIds: string[];
   status: 'draft' | 'approved' | 'rejected' | 'archived';
+  searchTokens?: string[];
   createdBy?: string;
   updatedBy?: string;
   createdAt?: Date;

@@ -1,6 +1,7 @@
 import { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
 import { Vocabulary, VocabularyType, CEFRLevel, VocabularyMeaning } from '../../../core/entities/Vocabulary';
 import { normalizeText } from '../../../shared/utils/normalizeText';
+import { buildPrefixTokens } from '../../../shared/utils/buildPrefixTokens';
 import { AppError } from '../../../core/errors/AppError';
 
 interface CreateVocabularyInput {
@@ -57,6 +58,9 @@ export class CreateVocabularyUseCase {
       })),
     ];
 
+    const allFormTexts = forms.map((f) => f.formText);
+    const searchTokens = buildPrefixTokens(allFormTexts.join(' '));
+
     return this.vocabularyRepository.create({
       text: input.text,
       normalizedText,
@@ -72,6 +76,7 @@ export class CreateVocabularyUseCase {
       status: input.status || 'approved',
       createdBy: input.createdBy,
       updatedBy: input.createdBy,
+      searchTokens,
     });
   }
 }

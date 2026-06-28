@@ -9,6 +9,22 @@ export interface ListVocabularyParams {
   limit: number;
 }
 
+export interface SearchExactParams {
+  normalizedQuery: string;
+  type?: string;
+  level?: string;
+  topic?: string;
+  limit?: number;
+}
+
+export interface SearchPrefixParams {
+  token: string;
+  type?: string;
+  level?: string;
+  topic?: string;
+  limit?: number;
+}
+
 export interface VocabularyRepository {
   findById(id: string): Promise<Vocabulary | null>;
   findByIds(ids: string[]): Promise<Vocabulary[]>;
@@ -28,4 +44,10 @@ export interface VocabularyRepository {
   findByNormalizedText(normalizedText: string): Promise<Vocabulary | null>;
   findManyByNormalizedTexts(normalizedTexts: string[]): Promise<Vocabulary[]>;
   findByFormNormalizedText(normalizedFormText: string): Promise<Vocabulary | null>;
+
+  // Fuzzy search methods
+  searchExact(params: SearchExactParams): Promise<Vocabulary[]>;
+  searchPrefix(params: SearchPrefixParams): Promise<Vocabulary[]>;
+  findApprovedForSearch(): Promise<Vocabulary[]>;
 }
+

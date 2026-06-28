@@ -26,6 +26,8 @@ import { DeleteVocabularyUseCase } from '../../app/use-cases/vocabulary/DeleteVo
 import { SaveVocabularyUseCase } from '../../app/use-cases/vocabulary/SaveVocabularyUseCase';
 import { MarkVocabularyKnownUseCase } from '../../app/use-cases/vocabulary/MarkVocabularyKnownUseCase';
 import { MarkVocabularyDifficultUseCase } from '../../app/use-cases/vocabulary/MarkVocabularyDifficultUseCase';
+import { SearchVocabularyUseCase } from '../../app/use-cases/vocabulary/SearchVocabularyUseCase';
+import { FuzzyVocabularySearchService } from '../../infrastructure/services/FuzzyVocabularySearchService';
 import { VocabularyController } from '../../interfaces/http/controllers/VocabularyController';
 
 // Reading imports
@@ -171,6 +173,15 @@ export function buildContainer() {
     userProgressRepository,
     vocabularyRepository,
     trackLearningActivityUseCase
+  );
+
+  // Fuzzy Search Service & SearchVocabularyUseCase
+  const fuzzyVocabularySearchService = new FuzzyVocabularySearchService({
+    vocabularyRepository,
+  });
+  const searchVocabularyUseCase = new SearchVocabularyUseCase(
+    vocabularyRepository,
+    fuzzyVocabularySearchService
   );
 
   const vocabularyController = new VocabularyController(
@@ -320,6 +331,8 @@ export function buildContainer() {
     cardRepository,
     passwordAuthProvider,
     authTokenService,
+    searchVocabularyUseCase,
+    fuzzyVocabularySearchService,
   };
 
   return containerInstance;

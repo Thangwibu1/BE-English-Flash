@@ -1,4 +1,4 @@
-import { VocabularyRepository, ListVocabularyParams } from '../../../../app/ports/repositories/VocabularyRepository';
+import { VocabularyRepository, ListVocabularyParams, SearchExactParams, SearchPrefixParams } from '../../../../app/ports/repositories/VocabularyRepository';
 import { Vocabulary } from '../../../../core/entities/Vocabulary';
 import { VocabularyModel, VocabularyDocument } from '../models/VocabularyModel';
 import { mapVocabularyDocToEntity } from '../mappers/vocabularyMapper';
@@ -70,6 +70,7 @@ export class MongoVocabularyRepository implements VocabularyRepository {
       components: data.components,
       topicIds: data.topicIds,
       status: data.status || 'approved',
+      searchTokens: data.searchTokens || [],
       createdBy: data.createdBy,
       updatedBy: data.updatedBy,
       deletedAt: null,
@@ -163,4 +164,56 @@ export class MongoVocabularyRepository implements VocabularyRepository {
     });
     return doc ? mapVocabularyDocToEntity(doc) : null;
   }
+
+  async searchExact(params: SearchExactParams): Promise<Vocabulary[]> {
+    const filter: any = {
+      status: 'approved',
+      deletedAt: null,
+      $or: [
+        { normalizedText: params.normalizedQuery },
+        { 'forms.normalizedFormText': params.normalizedQuery },
+      ],
+    };
+
+    if (params.type) filter.type = params.type;
+    if (params.level) filter.level = params.level;
+    if (params.topic) filter.topicIds = params.topic;
+
+    const docs = await VocabularyModel.find(filter).limit(params.limit || 20);
+    return docs.map(mapVocabularyDocToEntity);
+  }
+
+  async searchPrefix(params: SearchPrefixParams): Promise<Vocabulary[]> {
+    const filter: any = {
+      status: 'approved',
+      deletedAt: null,
+      searchTokens: params.token,
+    };
+
+    if (params.type) filter.type = params.type;
+    if (params.level) filter.level = params.level;
+    if (params.topic) filter.topicIds = params.topic;
+
+    const docs = await VocabularyModel.find(filter).limit(params.limit || 20);
+    return docs.map(mapVocabularyDocToEntity);
+  }
+
+  async findApprovedForSearch(): Promise<Vocabulary[]> {
+    const docs = await VocabularyModel.find({
+      status: 'approved',
+      deletedAt: null,
+    })
+      .select({
+        text: 1,
+        normalizedText: 1,
+        type: 1,
+        level: 1,
+        meanings: 1,
+        forms: 1,
+        topicIds: 1,
+      })
+      .lean<VocabularyDocument[]>();
+    return docs.map(mapVocabularyDocToEntity);
+  }
 }
+
