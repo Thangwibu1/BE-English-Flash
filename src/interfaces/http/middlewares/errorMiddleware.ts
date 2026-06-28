@@ -7,6 +7,9 @@ export function errorMiddleware(
   res: Response,
   next: NextFunction
 ) {
+  // Log all errors with method and URL
+  console.error(`[Error] ${req.method} ${req.originalUrl || req.url}:`, error);
+
   if (error instanceof AppError) {
     return res.status(error.statusCode).json({
       success: false,
@@ -17,9 +20,6 @@ export function errorMiddleware(
       },
     });
   }
-
-  // Log unknown internal errors
-  console.error(error);
 
   return res.status(500).json({
     success: false,

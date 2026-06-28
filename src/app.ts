@@ -23,6 +23,12 @@ export function createApp() {
 
   app.use(express.json({ limit: '2mb' }));
 
+  // Request logger middleware
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+  });
+
   // Health check route
   app.get('/api/health', (req, res) => {
     res.json({
