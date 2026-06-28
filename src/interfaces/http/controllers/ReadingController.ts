@@ -32,6 +32,7 @@ export class ReadingController {
         search,
         level,
         topicId,
+        status: 'published',
         page,
         limit,
       });

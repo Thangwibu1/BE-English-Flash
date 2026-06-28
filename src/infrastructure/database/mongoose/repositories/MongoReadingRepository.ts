@@ -25,6 +25,10 @@ export class MongoReadingRepository implements ReadingRepository {
       query.topicIds = params.topicId;
     }
 
+    if (params.status) {
+      query.status = params.status;
+    }
+
     const total = await ReadingModel.countDocuments(query);
     const docs = await ReadingModel.find(query)
       .sort({ createdAt: -1 })

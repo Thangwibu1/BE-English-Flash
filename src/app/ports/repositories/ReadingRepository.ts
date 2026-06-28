@@ -4,6 +4,7 @@ export interface ListReadingParams {
   search?: string;
   level?: string;
   topicId?: string;
+  status?: string;
   page: number;
   limit: number;
 }
