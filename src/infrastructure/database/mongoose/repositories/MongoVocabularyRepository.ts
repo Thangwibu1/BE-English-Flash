@@ -147,4 +147,20 @@ export class MongoVocabularyRepository implements VocabularyRepository {
     const doc = await VocabularyModel.findOne({ normalizedText, deletedAt: null });
     return doc ? mapVocabularyDocToEntity(doc) : null;
   }
+
+  async findManyByNormalizedTexts(normalizedTexts: string[]): Promise<Vocabulary[]> {
+    const docs = await VocabularyModel.find({
+      normalizedText: { $in: normalizedTexts },
+      deletedAt: null,
+    });
+    return docs.map(mapVocabularyDocToEntity);
+  }
+
+  async findByFormNormalizedText(normalizedFormText: string): Promise<Vocabulary | null> {
+    const doc = await VocabularyModel.findOne({
+      'forms.normalizedFormText': normalizedFormText,
+      deletedAt: null,
+    });
+    return doc ? mapVocabularyDocToEntity(doc) : null;
+  }
 }

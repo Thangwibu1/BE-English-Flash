@@ -1,19 +1,26 @@
-import { AIProviderService } from '../../ports/services/AIProviderService';
-import { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
-import { normalizeText } from '../../../shared/utils/normalizeText';
+import type { AIProviderService } from '../../ports/services/AIProviderService';
+import type { VocabularyRepository } from '../../ports/repositories/VocabularyRepository';
+import { MatchAiCandidatesToVocabularyUseCase } from './MatchAiCandidatesToVocabularyUseCase';
 import { AppError } from '../../../core/errors/AppError';
 
 export class AnalyzeContributionReadingWithAiUseCase {
+  private matchUseCase: MatchAiCandidatesToVocabularyUseCase;
+
   constructor(private deps: {
     aiProviderService: AIProviderService;
     vocabularyRepository: VocabularyRepository;
-  }) {}
+  }) {
+    this.matchUseCase = new MatchAiCandidatesToVocabularyUseCase({
+      vocabularyRepository: deps.vocabularyRepository,
+    });
+  }
 
   async execute(input: {
     userId: string;
     title?: string;
     content: string;
     level?: string;
+    mode?: 'focused' | 'coverage';
     maxItems?: number;
   }) {
     if (!input.content || input.content.trim().length < 50) {
@@ -21,55 +28,46 @@ export class AnalyzeContributionReadingWithAiUseCase {
     }
 
     try {
-      const maxItems = input.maxItems || 30;
+      const maxItems = input.maxItems || 120;
+      const mode = input.mode || 'coverage';
 
-      const aiResult = await this.deps.aiProviderService.extractVocabularyFromReading({
+      // Step 1: Get AI candidates using coverage-mode prompt
+      const aiResult = await this.deps.aiProviderService.extractReadingCandidates({
         title: input.title,
         content: input.content,
+        level: input.level,
+        mode,
         maxItems,
       });
 
-      const checkedItems: any[] = [];
+      // Step 2: Match candidates against vocabulary DB
+      const matchedItems = await this.matchUseCase.execute({
+        candidates: aiResult.items,
+      });
 
-      for (let i = 0; i < aiResult.items.length; i++) {
-        const item = aiResult.items[i];
-        const normalizedText = normalizeText(item.text);
-
-        const existsInDictionary = await this.deps.vocabularyRepository.findByNormalizedText(
-          normalizedText
-        );
-
-        checkedItems.push({
-          clientId: `ai_${Date.now()}_${i}`,
-          text: item.text,
-          normalizedText,
-          type: item.type,
-          level: item.level,
-          partOfSpeech: item.partOfSpeech || null,
-          meaningVi: item.meaningVi,
-          meaningEn: item.meaningEn || null,
-          forms: item.forms?.length ? item.forms : [item.text],
-          topics: item.topics || [],
-          exampleEn: item.exampleEn || null,
-          exampleVi: item.exampleVi || null,
-          sourceText: item.sourceText || null,
-          confidence: item.confidence ?? 0.5,
-          duplicateStatus: existsInDictionary ? 'exists_in_dictionary' : 'new',
-          userEdited: false,
-          source: 'ai',
-        });
-      }
+      const matched = matchedItems.filter((x: any) => x.status === 'matched');
+      const missing = matchedItems.filter((x: any) => x.status === 'missing');
+      const phrases = matchedItems.filter((x: any) => x.type !== 'single_word');
+      const words = matchedItems.filter((x: any) => x.type === 'single_word');
 
       return {
-        items: checkedItems,
+        mode,
+        items: matchedItems,
         summary: {
-          totalItems: checkedItems.length,
-          newItems: checkedItems.filter((x) => x.duplicateStatus === 'new').length,
-          duplicates: checkedItems.filter((x) => x.duplicateStatus !== 'new').length,
+          totalItems: matchedItems.length,
+          matchedItems: matched.length,
+          missingItems: missing.length,
+          phraseItems: phrases.length,
+          singleWordItems: words.length,
         },
       };
     } catch (error: any) {
-      throw new AppError('AI_ANALYSIS_FAILED', error instanceof Error ? error.message : 'Could not analyze the reading. Please try again.', 500);
+      if (error instanceof AppError) throw error;
+      throw new AppError(
+        'AI_ANALYSIS_FAILED',
+        error instanceof Error ? error.message : 'Could not analyze the reading. Please try again.',
+        500
+      );
     }
   }
 }

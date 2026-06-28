@@ -40,6 +40,7 @@ router.post(
         title: req.body.title,
         content: req.body.content,
         level: req.body.level,
+        mode: req.body.mode || 'coverage',
         maxItems: req.body.maxItems,
       });
 
@@ -110,70 +111,66 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
       } else if (contrib.action === 'update' && contrib.targetId) {
         await VocabularyModel.updateOne({ _id: contrib.targetId }, { $set: payload });
       }
-    } else if (contrib.type === 'reading') {
-      if (contrib.action === 'create') {
-        await ReadingModel.create({
-          ...payload,
-          status: 'published',
-          createdBy: contrib.submittedBy,
-        });
-      } else if (contrib.action === 'update' && contrib.targetId) {
-        await ReadingModel.updateOne({ _id: contrib.targetId }, { $set: payload });
-      }
-    } else if (contrib.type === 'reading_with_ai_vocabulary') {
+    } else if (contrib.type === 'reading' || contrib.type === 'reading_with_ai_vocabulary') {
       if (contrib.action === 'create') {
         const { reprocessReadingUseCase } = buildContainer();
 
-        // 1. Loop through suggestedVocabularyItems and create new vocabularies
-        const suggestedVocabularyItems = payload.suggestedVocabularyItems || [];
-        for (const item of suggestedVocabularyItems) {
-          const normalizedText = item.normalizedText || item.text.trim().toLowerCase();
-          
-          // Check if already exists in official dictionary
+        // --- Handle aiMissingItems: create approved vocabulary for missing items ---
+        const aiMissingItems: any[] = payload.aiMissingItems || payload.suggestedVocabularyItems || [];
+        for (const item of aiMissingItems) {
+          const sv = item.suggestedVocabulary || item;
+          const normalizedText = sv.normalizedText || sv.text?.trim().toLowerCase();
+          if (!normalizedText) continue;
+
           const exists = await VocabularyModel.findOne({ normalizedText, deletedAt: null });
           if (!exists) {
             await VocabularyModel.create({
-              text: item.text,
+              text: sv.text,
               normalizedText,
-              type: item.type,
-              level: item.level,
-              partOfSpeech: item.partOfSpeech || undefined,
+              type: sv.type || 'single_word',
+              level: sv.level || undefined,
+              partOfSpeech: sv.partOfSpeech || undefined,
               meanings: [{
-                meaningVi: item.meaningVi,
-                meaningEn: item.meaningEn || undefined,
-                examples: item.exampleEn ? [{
-                  exampleEn: item.exampleEn,
-                  exampleVi: item.exampleVi || undefined,
-                }] : [],
+                meaningVi: sv.meaningVi || `[Draft] ${sv.text}`,
+                meaningEn: sv.meaningEn || undefined,
+                examples: sv.exampleEn ? [{ exampleEn: sv.exampleEn, exampleVi: sv.exampleVi || undefined }] : [],
               }],
-              forms: item.forms ? item.forms.map((f: string) => ({ formText: f, normalizedFormText: f.toLowerCase() })) : [{ formText: item.text, normalizedFormText: normalizedText }],
-              topicIds: [], // default empty
+              forms: sv.forms?.length
+                ? sv.forms.map((f: string) => ({ formText: f, normalizedFormText: f.trim().toLowerCase() }))
+                : [{ formText: sv.text, normalizedFormText: normalizedText }],
+              topicIds: [],
               status: 'approved',
               createdBy: contrib.submittedBy,
             });
           }
         }
 
-        // 2. Create official Reading
+        // --- Create the official Reading document ---
+        const slug = payload.slug
+          || payload.title?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+          || `reading-${Date.now()}`;
+
         const reading = await ReadingModel.create({
           title: payload.title,
-          slug: payload.slug || payload.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+          slug,
           subtitle: payload.subtitle || undefined,
-          content: payload.bodyText,
+          content: payload.bodyText || payload.content,
           level: payload.level,
-          topicIds: payload.topics || [], // topics is actually topicIds
+          topicIds: payload.topicIds || payload.topics || [],
           source: payload.source || 'user_contribution',
           estimatedReadingTimeMinutes: payload.estimatedReadingTimeMinutes || 0,
-          spans: [], // calculated in reprocess
-          vocabularyIds: [], // calculated in reprocess
+          spans: [],
+          vocabularyIds: [],
           status: 'published',
           createdBy: contrib.submittedBy,
         });
 
-        // 3. Reprocess reading highlights
+        // --- Reprocess reading to create spans from approved vocabulary ---
         await reprocessReadingUseCase.execute({
           readingId: reading._id.toString(),
         });
+      } else if (contrib.action === 'update' && contrib.targetId) {
+        await ReadingModel.updateOne({ _id: contrib.targetId }, { $set: payload });
       }
     }
 

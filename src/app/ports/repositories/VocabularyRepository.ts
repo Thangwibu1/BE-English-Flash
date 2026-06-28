@@ -26,4 +26,6 @@ export interface VocabularyRepository {
     type: string;
   }[]>;
   findByNormalizedText(normalizedText: string): Promise<Vocabulary | null>;
+  findManyByNormalizedTexts(normalizedTexts: string[]): Promise<Vocabulary[]>;
+  findByFormNormalizedText(normalizedFormText: string): Promise<Vocabulary | null>;
 }
