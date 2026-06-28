@@ -27,6 +27,7 @@ export class NineRouterAIProvider implements AIProviderService {
       body: JSON.stringify({
         model: this.config.model,
         stream: false,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: 'system',
@@ -88,6 +89,7 @@ export class NineRouterAIProvider implements AIProviderService {
       body: JSON.stringify({
         model: this.config.model,
         stream: false,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: 'system',
