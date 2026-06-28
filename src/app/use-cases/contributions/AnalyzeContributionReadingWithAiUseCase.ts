@@ -63,9 +63,13 @@ export class AnalyzeContributionReadingWithAiUseCase {
       };
     } catch (error: any) {
       if (error instanceof AppError) throw error;
+      console.error('[AnalyzeContributionReadingWithAiUseCase] Underlying error:', error);
+      if (error && error.cause) {
+        console.error('[AnalyzeContributionReadingWithAiUseCase] Underlying error cause:', error.cause);
+      }
       throw new AppError(
         'AI_ANALYSIS_FAILED',
-        error instanceof Error ? error.message : 'Could not analyze the reading. Please try again.',
+        error instanceof Error ? `${error.message}${error.cause ? ' (Cause: ' + JSON.stringify(error.cause) + ')' : ''}` : 'Could not analyze the reading. Please try again.',
         500
       );
     }

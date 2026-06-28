@@ -1,6 +1,10 @@
 import dotenv from 'dotenv';
+import dns from 'dns';
 import { createApp } from './app';
 import { connectMongo } from './infrastructure/database/mongoose/connection';
+
+// Force Node.js to resolve IPv4 first (fixes native fetch failed in alpine containers)
+dns.setDefaultResultOrder('ipv4first');
 
 dotenv.config();
 
