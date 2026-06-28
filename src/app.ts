@@ -8,6 +8,7 @@ import { flashcardRoutes } from './interfaces/http/routes/flashcard.routes';
 import { topicRoutes } from './interfaces/http/routes/topic.routes';
 import { contributionRoutes } from './interfaces/http/routes/contribution.routes';
 import { streakRoutes } from './interfaces/http/routes/streak.routes';
+import { adminReadingAiRoutes } from './interfaces/http/routes/admin-reading-ai.routes';
 import { authMiddleware } from './interfaces/http/middlewares/authMiddleware';
 import { buildContainer } from './shared/container/buildContainer';
 
@@ -42,6 +43,7 @@ export function createApp() {
   app.use('/api/topics', topicRoutes);
   app.use('/api/contributions', contributionRoutes);
   app.use('/api', streakRoutes);
+  app.use('/api', adminReadingAiRoutes);
 
   // Global Error Handler
   app.use(errorMiddleware);

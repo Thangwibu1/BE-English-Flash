@@ -59,6 +59,16 @@ import { TrackLearningActivityUseCase } from '../../app/use-cases/streak/TrackLe
 import { GetMyStreakUseCase } from '../../app/use-cases/streak/GetMyStreakUseCase';
 import { StreakController } from '../../interfaces/http/controllers/StreakController';
 
+// AI Reading Import imports
+import { MongoAiVocabularySuggestionRepository } from '../../infrastructure/database/mongoose/repositories/MongoAiVocabularySuggestionRepository';
+import { NineRouterAIProvider } from '../../infrastructure/ai/NineRouterAIProvider';
+import { AnalyzeReadingVocabularyUseCase } from '../../app/use-cases/admin/readings/AnalyzeReadingVocabularyUseCase';
+import { GetReadingAiSuggestionsUseCase } from '../../app/use-cases/admin/readings/GetReadingAiSuggestionsUseCase';
+import { UpdateAiVocabularySuggestionUseCase } from '../../app/use-cases/admin/readings/UpdateAiVocabularySuggestionUseCase';
+import { ApproveAiVocabularySuggestionUseCase } from '../../app/use-cases/admin/readings/ApproveAiVocabularySuggestionUseCase';
+import { RejectAiVocabularySuggestionUseCase } from '../../app/use-cases/admin/readings/RejectAiVocabularySuggestionUseCase';
+import { AdminReadingAiController } from '../../interfaces/http/controllers/AdminReadingAiController';
+
 let containerInstance: any = null;
 
 export function buildContainer() {
@@ -74,6 +84,13 @@ export function buildContainer() {
   const cardRepository = new MongoFlashcardCardRepository();
   const userActivityRepository = new MongoUserActivityRepository();
   const userStreakRepository = new MongoUserStreakRepository();
+  const aiVocabularySuggestionRepository = new MongoAiVocabularySuggestionRepository();
+  
+  const aiProviderService = new NineRouterAIProvider({
+    apiKey: process.env.NINEROUTER_API_KEY || '',
+    baseUrl: process.env.NINEROUTER_BASE_URL || 'https://api.nine-router.com/v1',
+    model: process.env.NINEROUTER_MODEL || 'google/gemini-flash-1.5',
+  });
   
   const readingPreprocessor = new SimpleReadingPreprocessor();
   const reviewScheduler = new BasicReviewScheduler();
@@ -242,6 +259,41 @@ export function buildContainer() {
     trackLearningActivityUseCase
   });
 
+  // AI Reading Import Use Cases & Controller
+  const analyzeReadingVocabularyUseCase = new AnalyzeReadingVocabularyUseCase({
+    readingRepository,
+    vocabularyRepository,
+    aiVocabularySuggestionRepository,
+    aiProviderService,
+  });
+
+  const getReadingAiSuggestionsUseCase = new GetReadingAiSuggestionsUseCase({
+    aiVocabularySuggestionRepository,
+  });
+
+  const updateAiVocabularySuggestionUseCase = new UpdateAiVocabularySuggestionUseCase({
+    aiVocabularySuggestionRepository,
+  });
+
+  const approveAiVocabularySuggestionUseCase = new ApproveAiVocabularySuggestionUseCase({
+    aiVocabularySuggestionRepository,
+    vocabularyRepository,
+    reprocessReadingUseCase,
+  });
+
+  const rejectAiVocabularySuggestionUseCase = new RejectAiVocabularySuggestionUseCase({
+    aiVocabularySuggestionRepository,
+  });
+
+  const adminReadingAiController = new AdminReadingAiController({
+    analyzeReadingVocabularyUseCase,
+    getReadingAiSuggestionsUseCase,
+    updateAiVocabularySuggestionUseCase,
+    approveAiVocabularySuggestionUseCase,
+    rejectAiVocabularySuggestionUseCase,
+    reprocessReadingUseCase,
+  });
+
   containerInstance = {
     authController,
     topicController,
@@ -249,6 +301,7 @@ export function buildContainer() {
     readingController,
     flashcardController,
     streakController,
+    adminReadingAiController,
     trackLearningActivityUseCase,
     userRepository,
     topicRepository,

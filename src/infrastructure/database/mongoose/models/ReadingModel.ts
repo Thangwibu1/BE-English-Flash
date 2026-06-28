@@ -25,6 +25,10 @@ export interface ReadingDocument extends Document {
   spans: ReadingSpan[];
   vocabularyIds: mongoose.Types.ObjectId[];
   status: 'draft' | 'published' | 'archived';
+  aiAnalysisStatus?: 'not_started' | 'processing' | 'completed' | 'failed';
+  aiAnalyzedAt?: Date | null;
+  aiAnalysisHash?: string | null;
+  aiAnalysisError?: string | null;
   createdBy?: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
@@ -65,6 +69,14 @@ const ReadingSchema = new Schema<ReadingDocument>(
       enum: ['draft', 'published', 'archived'],
       default: 'draft',
     },
+    aiAnalysisStatus: {
+      type: String,
+      enum: ['not_started', 'processing', 'completed', 'failed'],
+      default: 'not_started',
+    },
+    aiAnalyzedAt: { type: Date, default: null },
+    aiAnalysisHash: { type: String, default: null },
+    aiAnalysisError: { type: String, default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date, default: null },

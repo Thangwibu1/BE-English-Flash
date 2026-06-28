@@ -25,6 +25,10 @@ export interface Reading {
   spans: ReadingSpan[];
   vocabularyIds: string[];
   status: 'draft' | 'published' | 'archived';
+  aiAnalysisStatus?: 'not_started' | 'processing' | 'completed' | 'failed';
+  aiAnalyzedAt?: Date | null;
+  aiAnalysisHash?: string | null;
+  aiAnalysisError?: string | null;
   createdBy?: string;
   updatedBy?: string;
   createdAt?: Date;

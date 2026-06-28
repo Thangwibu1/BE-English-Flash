@@ -142,4 +142,9 @@ export class MongoVocabularyRepository implements VocabularyRepository {
 
     return forms;
   }
+
+  async findByNormalizedText(normalizedText: string): Promise<Vocabulary | null> {
+    const doc = await VocabularyModel.findOne({ normalizedText, deletedAt: null });
+    return doc ? mapVocabularyDocToEntity(doc) : null;
+  }
 }
