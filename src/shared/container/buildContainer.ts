@@ -310,6 +310,7 @@ export function buildContainer() {
     adminReadingAiController,
     analyzeContributionReadingWithAiUseCase,
     trackLearningActivityUseCase,
+    reprocessReadingUseCase,
     userRepository,
     topicRepository,
     vocabularyRepository,
