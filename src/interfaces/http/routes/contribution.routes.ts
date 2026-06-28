@@ -9,11 +9,11 @@ import { buildContainer } from '../../../shared/container/buildContainer';
 
 const router = Router();
 
-// GET all contributions (Admin or Contributor)
-router.get('/', authMiddleware, requireRole('admin', 'contributor'), async (req: Request, res: Response, next: NextFunction) => {
+// GET all contributions (Admin, Contributor or User)
+router.get('/', authMiddleware, requireRole('admin', 'contributor', 'user'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query: any = { deletedAt: null };
-    if (req.user!.role === 'contributor') {
+    if (req.user!.role !== 'admin') {
       query.submittedBy = req.user!.id;
     }
     const list = await ContributionSubmissionModel.find(query)
