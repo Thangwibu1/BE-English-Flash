@@ -68,6 +68,7 @@ import { UpdateAiVocabularySuggestionUseCase } from '../../app/use-cases/admin/r
 import { ApproveAiVocabularySuggestionUseCase } from '../../app/use-cases/admin/readings/ApproveAiVocabularySuggestionUseCase';
 import { RejectAiVocabularySuggestionUseCase } from '../../app/use-cases/admin/readings/RejectAiVocabularySuggestionUseCase';
 import { AdminReadingAiController } from '../../interfaces/http/controllers/AdminReadingAiController';
+import { AnalyzeContributionReadingWithAiUseCase } from '../../app/use-cases/contributions/AnalyzeContributionReadingWithAiUseCase';
 
 let containerInstance: any = null;
 
@@ -285,6 +286,11 @@ export function buildContainer() {
     aiVocabularySuggestionRepository,
   });
 
+  const analyzeContributionReadingWithAiUseCase = new AnalyzeContributionReadingWithAiUseCase({
+    aiProviderService,
+    vocabularyRepository,
+  });
+
   const adminReadingAiController = new AdminReadingAiController({
     analyzeReadingVocabularyUseCase,
     getReadingAiSuggestionsUseCase,
@@ -302,6 +308,7 @@ export function buildContainer() {
     flashcardController,
     streakController,
     adminReadingAiController,
+    analyzeContributionReadingWithAiUseCase,
     trackLearningActivityUseCase,
     userRepository,
     topicRepository,

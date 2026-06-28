@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ContributionSubmissionDocument extends Document {
   submittedBy: mongoose.Types.ObjectId;
-  type: 'vocabulary' | 'reading';
+  type: 'vocabulary' | 'reading' | 'reading_with_ai_vocabulary';
   action: 'create' | 'update';
   targetId?: mongoose.Types.ObjectId;
   status: 'pending' | 'approved' | 'rejected' | 'needs_changes';
@@ -18,7 +18,7 @@ export interface ContributionSubmissionDocument extends Document {
 const ContributionSubmissionSchema = new Schema<ContributionSubmissionDocument>(
   {
     submittedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    type: { type: String, enum: ['vocabulary', 'reading'], required: true },
+    type: { type: String, enum: ['vocabulary', 'reading', 'reading_with_ai_vocabulary'], required: true },
     action: { type: String, enum: ['create', 'update'], required: true },
     targetId: { type: Schema.Types.ObjectId },
     status: {
