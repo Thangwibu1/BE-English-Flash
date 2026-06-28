@@ -53,8 +53,10 @@ import { ReviewFlashcardUseCase } from '../../app/use-cases/flashcard/ReviewFlas
 import { FlashcardController } from '../../interfaces/http/controllers/FlashcardController';
 
 // Streak imports
-import { GetStreakUseCase } from '../../app/use-cases/streak/GetStreakUseCase';
+import { MongoUserActivityRepository } from '../../infrastructure/database/mongoose/repositories/MongoUserActivityRepository';
+import { MongoUserStreakRepository } from '../../infrastructure/database/mongoose/repositories/MongoUserStreakRepository';
 import { TrackLearningActivityUseCase } from '../../app/use-cases/streak/TrackLearningActivityUseCase';
+import { GetMyStreakUseCase } from '../../app/use-cases/streak/GetMyStreakUseCase';
 import { StreakController } from '../../interfaces/http/controllers/StreakController';
 
 let containerInstance: any = null;
@@ -70,6 +72,8 @@ export function buildContainer() {
   const readingRepository = new MongoReadingRepository();
   const deckRepository = new MongoFlashcardDeckRepository();
   const cardRepository = new MongoFlashcardCardRepository();
+  const userActivityRepository = new MongoUserActivityRepository();
+  const userStreakRepository = new MongoUserStreakRepository();
   
   const readingPreprocessor = new SimpleReadingPreprocessor();
   const reviewScheduler = new BasicReviewScheduler();
@@ -77,8 +81,14 @@ export function buildContainer() {
   const authTokenService = new JwtAuthTokenService();
 
   // Streak Use Cases (Instantiated early for injection)
-  const getStreakUseCase = new GetStreakUseCase();
-  const trackLearningActivityUseCase = new TrackLearningActivityUseCase();
+  const trackLearningActivityUseCase = new TrackLearningActivityUseCase(
+    userActivityRepository,
+    userStreakRepository
+  );
+  const getMyStreakUseCase = new GetMyStreakUseCase(
+    userActivityRepository,
+    userStreakRepository
+  );
 
   // Auth Use Cases & Controller
   const registerUseCase = new RegisterUseCase(
@@ -227,7 +237,10 @@ export function buildContainer() {
   );
 
   // Streak Controller (Use cases instantiated at the top)
-  const streakController = new StreakController(getStreakUseCase, trackLearningActivityUseCase);
+  const streakController = new StreakController({
+    getMyStreakUseCase,
+    trackLearningActivityUseCase
+  });
 
   containerInstance = {
     authController,

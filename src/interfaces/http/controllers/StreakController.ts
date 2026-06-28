@@ -1,17 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
-import { GetStreakUseCase } from '../../../app/use-cases/streak/GetStreakUseCase';
-import { TrackLearningActivityUseCase } from '../../../app/use-cases/streak/TrackLearningActivityUseCase';
 import { UserWordProgressModel } from '../../../infrastructure/database/mongoose/models/UserWordProgressModel';
 import { UserStreakModel } from '../../../infrastructure/database/mongoose/models/UserStreakModel';
 import mongoose from 'mongoose';
 
 export class StreakController {
-  constructor(
-    private getStreakUseCase: GetStreakUseCase,
-    private trackLearningActivityUseCase: TrackLearningActivityUseCase
-  ) {}
+  constructor(private deps: {
+    getMyStreakUseCase: any;
+    trackLearningActivityUseCase: any;
+  }) {}
 
-  getStreak = async (req: Request, res: Response, next: NextFunction) => {
+  getMyStreak = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?.id;
       if (!userId) {
@@ -21,18 +19,18 @@ export class StreakController {
         });
       }
 
-      const streakData = await this.getStreakUseCase.execute({ userId });
+      const result = await this.deps.getMyStreakUseCase.execute({ userId });
       
       res.status(200).json({
         success: true,
-        data: streakData
+        data: result
       });
     } catch (error) {
       next(error);
     }
   };
 
-  trackActivity = async (req: Request, res: Response, next: NextFunction) => {
+  trackActivityForTesting = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?.id;
       if (!userId) {
@@ -50,11 +48,14 @@ export class StreakController {
         });
       }
 
-      await this.trackLearningActivityUseCase.execute({ userId, activityType });
+      const result = await this.deps.trackLearningActivityUseCase.execute({
+        userId,
+        activityType
+      });
 
       res.status(200).json({
         success: true,
-        message: 'Activity tracked successfully'
+        data: result
       });
     } catch (error) {
       next(error);
