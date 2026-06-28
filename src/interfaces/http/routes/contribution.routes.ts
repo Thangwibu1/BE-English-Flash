@@ -146,9 +146,20 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
         }
 
         // --- Create the official Reading document ---
-        const slug = payload.slug
+        const baseSlug = payload.slug
           || payload.title?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
           || `reading-${Date.now()}`;
+
+        let slug = baseSlug;
+        let count = 1;
+        while (true) {
+          const exists = await ReadingModel.findOne({ slug, deletedAt: null });
+          if (!exists) {
+            break;
+          }
+          slug = `${baseSlug}-${count}`;
+          count++;
+        }
 
         const reading = await ReadingModel.create({
           title: payload.title,
