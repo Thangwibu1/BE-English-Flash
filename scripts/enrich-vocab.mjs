@@ -10,7 +10,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import axios from 'axios';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,22 +37,25 @@ const functionWords = new Set([
 async function translate(text, sl = 'en', tl = 'vi', retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
-      const res = await axios.get('https://translate.googleapis.com/translate_a/single', {
-        params: { client: 'gtx', sl, tl, dt: 't', q: text },
-        timeout: 5000
-      });
-      if (res.data && res.data[0]) {
-        return res.data[0].map(x => x[0]).join('').trim();
-      }
-    } catch (e) {
-      if (e.response?.status === 429) {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      
+      if (res.status === 429) {
         const delay = Math.pow(2, i) * 1000;
         console.warn(`[Translate] Rate limited (429). Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        console.warn(`[Translate] Error: ${e.message}. Retrying...`);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
       }
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data[0]) {
+          return data[0].map(x => x[0]).join('').trim();
+        }
+      }
+    } catch (e) {
+      console.warn(`[Translate] Error: ${e.message}. Retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
   throw new Error(`Failed to translate text after ${retries} retries.`);
@@ -63,22 +65,26 @@ async function translate(text, sl = 'en', tl = 'vi', retries = 3) {
 async function fetchDict(word, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
-      const res = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, {
-        timeout: 5000
-      });
-      return res.data;
-    } catch (e) {
-      if (e.response?.status === 404) {
+      const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      
+      if (res.status === 404) {
         return null; // Word not found
       }
-      if (e.response?.status === 429) {
+      
+      if (res.status === 429) {
         const delay = Math.pow(2, i) * 1000;
         console.warn(`[Dict] Rate limited (429) for "${word}". Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        console.warn(`[Dict] Error for "${word}": ${e.message}. Retrying...`);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
       }
+      
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn(`[Dict] Error for "${word}": ${e.message}. Retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
   return null; // Return null if all retries fail
