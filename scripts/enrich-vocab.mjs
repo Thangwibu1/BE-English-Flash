@@ -20,8 +20,8 @@ const ENRICHED_PATH = path.resolve(__dirname, '../enriched_vocabularies.jsonl');
 const FAILED_PATH = path.resolve(__dirname, '../failed_vocabularies.jsonl');
 const REPORT_PATH = path.resolve(__dirname, '../enrichment_report.json');
 
-const CONCURRENCY = 5;
-const REQUEST_DELAY_MS = 100; // delay between starting batches
+const CONCURRENCY = 1;
+const REQUEST_DELAY_MS = 1200; // delay between starting batches
 
 const functionWords = new Set([
   'the', 'a', 'an', 'to', 'of', 'in', 'on', 'at', 'and', 'or', 'but', 'is', 'are', 'was', 'were',
