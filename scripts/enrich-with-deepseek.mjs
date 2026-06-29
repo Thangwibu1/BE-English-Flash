@@ -20,8 +20,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://root:lameojicomatkhau@coolify.be-learning.io.vn:2808/English?authSource=admin&directConnection=true';
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
+const DEEPSEEK_API_KEY = process.env.NINEROUTER_API_KEY || process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_BASE_URL = process.env.NINEROUTER_BASE_URL || 'https://api.deepseek.com/v1';
+const DEEPSEEK_API_URL = DEEPSEEK_BASE_URL.replace(/\/$/, '') + '/chat/completions';
+const DEEPSEEK_MODEL = process.env.NINEROUTER_MODEL || 'deepseek-chat';
 const BATCH_SIZE = 40;
 
 const functionWords = new Set([
@@ -115,13 +117,12 @@ Format rules:
           'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
         },
         body: JSON.stringify({
-          model: 'deepseek-chat',
+          model: DEEPSEEK_MODEL,
           messages: [
             { role: 'system', content: systemMessage },
             { role: 'user', content: userMessage }
           ],
-          temperature: 0.1,
-          response_format: { type: 'json_object' } // Request JSON object if supported
+          temperature: 0.1
         })
       });
 
@@ -162,7 +163,7 @@ Format rules:
 
 async function main() {
   if (!DEEPSEEK_API_KEY) {
-    console.error('ERROR: DEEPSEEK_API_KEY is not defined. Please pass it via environment variables or set it in your .env file.');
+    console.error('ERROR: NINEROUTER_API_KEY or DEEPSEEK_API_KEY is not defined. Please check your .env file.');
     process.exit(1);
   }
 
