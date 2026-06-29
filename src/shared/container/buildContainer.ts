@@ -27,6 +27,7 @@ import { SaveVocabularyUseCase } from '../../app/use-cases/vocabulary/SaveVocabu
 import { MarkVocabularyKnownUseCase } from '../../app/use-cases/vocabulary/MarkVocabularyKnownUseCase';
 import { MarkVocabularyDifficultUseCase } from '../../app/use-cases/vocabulary/MarkVocabularyDifficultUseCase';
 import { SearchVocabularyUseCase } from '../../app/use-cases/vocabulary/SearchVocabularyUseCase';
+import { LookupVocabularyByTextUseCase } from '../../app/use-cases/vocabulary/LookupVocabularyByTextUseCase';
 import { FuzzyVocabularySearchService } from '../../infrastructure/services/FuzzyVocabularySearchService';
 import { VocabularyController } from '../../interfaces/http/controllers/VocabularyController';
 
@@ -183,6 +184,10 @@ export function buildContainer() {
     vocabularyRepository,
     fuzzyVocabularySearchService
   );
+  const lookupVocabularyByTextUseCase = new LookupVocabularyByTextUseCase(
+    vocabularyRepository,
+    fuzzyVocabularySearchService
+  );
 
   const vocabularyController = new VocabularyController(
     listVocabulariesUseCase,
@@ -333,6 +338,7 @@ export function buildContainer() {
     authTokenService,
     searchVocabularyUseCase,
     fuzzyVocabularySearchService,
+    lookupVocabularyByTextUseCase,
   };
 
   return containerInstance;

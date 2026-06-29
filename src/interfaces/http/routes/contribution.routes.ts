@@ -115,9 +115,12 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
       if (contrib.action === 'create') {
         const { reprocessReadingUseCase } = buildContainer();
 
-        // --- Handle aiMissingItems: create approved vocabulary for missing items ---
+        // --- Handle missing items (AI and Manual): create approved vocabulary for missing items ---
         const aiMissingItems: any[] = payload.aiMissingItems || payload.suggestedVocabularyItems || [];
-        for (const item of aiMissingItems) {
+        const manualMissingItems: any[] = payload.manualMissingItems || [];
+        const missingItemsToCreate = [...aiMissingItems, ...manualMissingItems];
+
+        for (const item of missingItemsToCreate) {
           const sv = item.suggestedVocabulary || item;
           const normalizedText = sv.normalizedText || sv.text?.trim().toLowerCase();
           if (!normalizedText) continue;
@@ -138,7 +141,7 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
               forms: sv.forms?.length
                 ? sv.forms.map((f: string) => ({ formText: f, normalizedFormText: f.trim().toLowerCase() }))
                 : [{ formText: sv.text, normalizedFormText: normalizedText }],
-              topicIds: [],
+              topicIds: sv.topicIds || sv.topics || [],
               status: 'approved',
               createdBy: contrib.submittedBy,
             });

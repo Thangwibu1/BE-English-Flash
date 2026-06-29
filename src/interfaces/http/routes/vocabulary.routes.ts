@@ -129,6 +129,27 @@ For this item, return this JSON shape:
   }
 });
 
+// Lookup vocabulary details and suggestions
+router.post('/lookup', authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { text, includeSuggestions } = req.body;
+    if (!text || !text.trim()) {
+      throw new AppError('BAD_REQUEST', 'Text is required', 400);
+    }
+    const { lookupVocabularyByTextUseCase } = buildContainer();
+    const result = await lookupVocabularyByTextUseCase.execute({
+      text,
+      includeSuggestions: includeSuggestions !== false,
+    });
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Admin: Add vocabulary to DB directly (with full fields + AI enrichment optional)
 // POST /api/vocabularies/add-vocab
 router.post(
