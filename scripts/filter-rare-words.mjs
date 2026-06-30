@@ -1,11 +1,12 @@
 /**
- * AuraEnglish — Filter Out Rare/Obscure Words (Interactive Version)
+ * AuraEnglish — Filter Out Rare/Obscure Words (Parallel Worker Version)
  *
  * This script reads `missing_word_family_list.json` and uses the selected AI provider
- * (DeepSeek or Claude) to filter out extremely rare, obscure, highly technical jargon,
- * or plain plural/inflection words, keeping only standard vocabulary for learners (CEFR A1-C2).
+ * (DeepSeek or Claude) with 10 parallel workers to filter out extremely rare, obscure,
+ * highly technical jargon, or plain plural/inflection words, keeping only standard vocabulary
+ * for learners (CEFR A1-C2).
  *
- * It processes the list sequentially in batches of 200 words with a cooldown.
+ * It is extremely fast because it runs 10 parallel request slots concurrently.
  * If a batch fails, it keeps the original words as a fallback.
  *
  * Usage:
@@ -132,6 +133,62 @@ Strictly KEEP:
 
 Return ONLY a valid JSON array of strings containing the filtered words. Do not include markdown formatting or explanation.`;
 
+// ── Batch Process Function ──
+async function processFilterBatch(provider, batch, batchIndex) {
+  const userContent = `Filter this list of ${batch.length} words:\n${JSON.stringify(batch)}`;
+  const filtered = await callAI(provider, SYSTEM_PROMPT, userContent);
+  if (Array.isArray(filtered)) {
+    return filtered;
+  }
+  throw new Error('AI response is not a valid JSON array.');
+}
+
+// ── Worker Pool ──
+async function runWithWorkers(missingWordsList, processFn, activeWorkers) {
+  const queue = [];
+  let batchIndex = 0;
+  for (let i = 0; i < missingWordsList.length; i += CHUNK_SIZE) {
+    queue.push({ batch: missingWordsList.slice(i, i + CHUNK_SIZE), idx: ++batchIndex });
+  }
+
+  const totalBatches = queue.length;
+  const workersCount = activeWorkers.length;
+  console.log(`\n⚡ Starting ${workersCount} parallel worker(s) — ${totalBatches} batches total (${CHUNK_SIZE} words/batch)`);
+  
+  const allFilteredResults = [];
+
+  async function worker(workerId) {
+    const provider = activeWorkers[workerId - 1];
+    while (queue.length > 0) {
+      const job = queue.shift();
+      if (!job) break;
+
+      const pct = (((job.idx - 1) / totalBatches) * 100).toFixed(1);
+      console.log(`🔧 [W${workerId}:${provider.name}] Batch ${job.idx}/${totalBatches} (${pct}% done) — ${job.batch.length} words`);
+
+      const t0 = Date.now();
+      let filtered = [];
+      try {
+        filtered = await processFn(provider, job.batch, job.idx);
+      } catch (err) {
+        console.error(`   ❌ [W${workerId}] Batch ${job.idx} failed completely: ${err.message}. Fallback: keeping original words.`);
+        filtered = job.batch;
+      }
+      
+      allFilteredResults.push(...filtered);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`   [W${workerId}] ✅ done in ${elapsed}s — ${job.batch.length} -> ${filtered.length} words`);
+
+      await sleep(1000);
+    }
+  }
+
+  const workerPromises = activeWorkers.map((_, idx) => worker(idx + 1));
+  await Promise.all(workerPromises);
+
+  return allFilteredResults;
+}
+
 // ── Interactive Helper ──
 function askQuestion(query) {
   const rl = readline.createInterface({
@@ -144,6 +201,7 @@ function askQuestion(query) {
   }));
 }
 
+// ── MAIN ──
 async function main() {
   if (!existsSync(FILE_PATH)) {
     console.error(`❌ File "${FILE_PATH}" not found.`);
@@ -173,8 +231,8 @@ async function main() {
     }
   } else {
     console.log('\n🤖 Select AI Provider to use for Filtering:');
-    console.log('   [1] DeepSeek (NINEROUTER)');
-    console.log('   [2] Claude (Default)');
+    console.log('   [1] DeepSeek (NINEROUTER) (10 parallel slots)');
+    console.log('   [2] Claude (10 parallel slots) (Default)');
     
     if (process.stdin.isTTY) {
       const choice = await askQuestion('👉 Enter choice (1-2): ');
@@ -196,42 +254,18 @@ async function main() {
     process.exit(1);
   }
 
-  const batches = [];
-  for (let i = 0; i < words.length; i += CHUNK_SIZE) {
-    batches.push(words.slice(i, i + CHUNK_SIZE));
+  // Build active workers (10 parallel slots for the selected provider)
+  const CONCURRENCY = 10;
+  const activeWorkers = [];
+  for (let i = 0; i < CONCURRENCY; i++) {
+    activeWorkers.push(provider);
   }
 
-  console.log(`🚀 Using provider: ${provider.name} (${provider.model})`);
-  console.log(`🚀 Processing ${batches.length} batches sequentially (${CHUNK_SIZE} words/batch)...`);
+  console.log(`🚀 Using provider: ${provider.name} (${provider.model}) with ${CONCURRENCY} parallel slots.`);
   const startTime = Date.now();
 
-  const cleanWords = [];
-
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    const userContent = `Filter this list of ${batch.length} words:\n${JSON.stringify(batch)}`;
-    
-    console.log(`\n⏳ Batch ${i + 1}/${batches.length} (${batch.length} words)...`);
-    
-    let filtered = [];
-    try {
-      filtered = await callAI(provider, SYSTEM_PROMPT, userContent);
-      if (Array.isArray(filtered)) {
-        console.log(`   ✅ Success: ${batch.length} -> ${filtered.length} words`);
-      } else {
-        throw new Error('AI response is not a valid JSON array.');
-      }
-    } catch (err) {
-      console.error(`   ❌ Failed after all attempts: ${err.message}`);
-      console.error(`      Fallback: keeping all ${batch.length} original words of this batch.`);
-      filtered = batch;
-    }
-    
-    cleanWords.push(...filtered);
-    
-    // Cooldown
-    await sleep(2000);
-  }
+  // Run the workers
+  const cleanWords = await runWithWorkers(words, processFilterBatch, activeWorkers);
 
   // Safety guard: Never write if the resulting array is completely empty
   if (cleanWords.length === 0) {
@@ -251,7 +285,7 @@ async function main() {
   console.log(`   Filtered count: ${cleanWords.length.toLocaleString()}`);
   console.log(`   Removed words:  ${removedCount.toLocaleString()} (${pct}%)`);
   console.log(`   Saved file:     ${FILE_PATH}`);
-  console.log(`   Time taken:     ${((Date.now() - startTime) / 1000 / 60).toFixed(1)} minutes`);
+  console.log(`   Time taken:     ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
   console.log('═'.repeat(60));
 }
 
