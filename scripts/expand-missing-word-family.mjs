@@ -1,0 +1,609 @@
+/**
+ * AuraEnglish — Vocabulary Expansion Script (Word Family Expansion)
+ *
+ * This script:
+ * 1. Scans all approved vocabulary records in the database.
+ * 2. Collects all unique words listed in their `wordFamily` arrays.
+ * 3. Identifies which of these relative words are MISSING from the database entirely.
+ * 4. batched-calls AI (DeepSeek / Claude / Both) to generate full approved records
+ *    for those missing words (definition, Vietnamese meaning, examples, pos, forms, etc.)
+ *    and inserts them into the DB.
+ *
+ * Usage:
+ *   node scripts/expand-missing-word-family.mjs
+ *   node scripts/expand-missing-word-family.mjs --provider=deepseek
+ *   node scripts/expand-missing-word-family.mjs --provider=claude
+ *   node scripts/expand-missing-word-family.mjs --provider=both
+ */
+
+import { readFileSync, existsSync, appendFileSync } from 'fs';
+import { MongoClient } from 'mongodb';
+import readline from 'readline';
+
+// ── Load .env ──
+const ENV_PATH = new URL('../.env', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
+function loadEnv(path) {
+  if (!existsSync(path)) return;
+  const lines = readFileSync(path, 'utf8').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    if (!process.env[key]) process.env[key] = value;
+  }
+}
+loadEnv(ENV_PATH);
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// ── Providers Config ──
+const PROVIDERS = [
+  {
+    name:      'DeepSeek (NINEROUTER)',
+    apiKey:    process.env.NINEROUTER_API_KEY,
+    baseUrl:   process.env.NINEROUTER_BASE_URL,
+    model:     process.env.NINEROUTER_MODEL    || 'deepseek-v4-flash',
+    enrichedBy:'ai:expansion:deepseek',
+  },
+  {
+    name:      'Claude',
+    apiKey:    process.env.NINEROUTER_9R_API_KEY,
+    baseUrl:   process.env.NINEROUTER_9R_BASE_URL,
+    model:     process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet',
+    enrichedBy:`ai:expansion:claude:${process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet'}`,
+  },
+];
+
+const BATCH_SIZE  = 10;  // 10 words per batch (100% stable, no JSON truncation)
+const RETRY_MAX   = 3;
+const REPORT_FILE = 'expansion_report_word_family.jsonl';
+
+// ── Helper functions ──
+function normalizeText(text) {
+  return text.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function normalizeWordList(arr) {
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.map(w => w.toLowerCase().trim()).filter(Boolean))];
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function appendReport(entry) {
+  appendFileSync(REPORT_FILE, JSON.stringify(entry) + '\n', 'utf8');
+}
+
+// ── Validation for New Items ──
+function validateNewItem(item) {
+  const errors = [];
+  if (!item.text)                           errors.push('missing text');
+  if (!item.type)                           errors.push('missing type');
+  if (!item.level)                          errors.push('missing level');
+  if (!item.partOfSpeech)                   errors.push('missing partOfSpeech');
+  if (!item.meaningVi || item.meaningVi.match(/\[Draft\]/i))
+                                            errors.push('invalid meaningVi');
+  if (!item.meaningEn)                      errors.push('missing meaningEn');
+  if (!item.exampleEn || item.exampleEn.match(/^Example for/i))
+                                            errors.push('invalid exampleEn');
+  if (!item.exampleVi)                      errors.push('missing exampleVi');
+  if (!Array.isArray(item.forms) || item.forms.length === 0)
+                                            errors.push('missing forms');
+  if (!Array.isArray(item.topics) || item.topics.length === 0)
+                                            errors.push('missing topics');
+  if (item.status !== undefined && item.status !== 'approved')
+                                            errors.push('status must be approved');
+  if (item.needsReview !== undefined && item.needsReview !== false)
+                                            errors.push('needsReview must be false');
+  if (typeof item.qualityScore !== 'number' || item.qualityScore < 0.75)
+                                            errors.push('qualityScore < 0.75');
+  return errors;
+}
+
+function mapToNewVocabularyDoc(item) {
+  return {
+    text: item.text,
+    normalizedText: normalizeText(item.text),
+
+    type: item.type || 'single_word',
+    level: item.level || 'A2',
+    partOfSpeech: item.partOfSpeech || 'noun',
+
+    meanings: [
+      {
+        meaningVi: item.meaningVi,
+        meaningEn: item.meaningEn,
+        synonyms: normalizeWordList(item.synonyms || []),
+        antonyms: normalizeWordList(item.antonyms || []),
+        examples: [
+          {
+            exampleEn: item.exampleEn,
+            exampleVi: item.exampleVi,
+          },
+        ],
+      },
+    ],
+
+    forms: normalizeWordList(item.forms || [item.text]).map(form => ({
+      formText: form,
+      normalizedFormText: normalizeText(form),
+    })),
+
+    components: [],
+    topicIds: [],
+    topics: item.topics || ['General'],
+
+    status: 'approved',
+    deletedAt: null,
+    autoHighlight: item.autoHighlight ?? true,
+
+    enrichedAt: new Date(),
+    enrichedBy: item._enrichedBy || 'ai:expansion:system',
+
+    needsReview: false,
+    qualityNotes: item.qualityNotes || [],
+    qualityScore: item.qualityScore || 0.9,
+
+    ...(item.wordFamily && item.wordFamily.length > 0
+      ? { wordFamily: normalizeWordList(item.wordFamily) }
+      : {}),
+  };
+}
+
+// ── Prompts ──
+const EXPAND_SYSTEM_PROMPT = `You are an expert English vocabulary lexicographer.
+Your task is to take a list of raw English words and return a fully detailed vocabulary record for each of them.
+Return ONLY valid JSON. No markdown fences. No explanation.
+
+Rules:
+- Add a clear Vietnamese meaning (meaningVi). No [Draft]. No TODO.
+- Add a simple English definition (meaningEn).
+- Add a natural English example sentence (exampleEn) using the word. Keep it concise (under 12 words).
+- Add Vietnamese translation of the example (exampleVi). Keep it concise (under 12 words).
+- Add partOfSpeech (noun / verb / adjective / adverb / preposition / conjunction / etc.).
+- Add forms array (inflections like plural, past tense, present participle, lowercase).
+- Add 1-3 relevant topics (English topic names like Work, Nature, Health, Education, etc.).
+- Add synonyms matching the word's meaning (can be empty []).
+- Add antonyms matching the word's meaning (can be empty []).
+- Add wordFamily candidates (the other words related to this word, can be empty []).
+- Set autoHighlight=true for useful content words, false for functional words.
+- Set qualityScore between 0.85 and 1.0.`;
+
+const EXPAND_SCHEMA_PROMPT = `Return JSON format exactly:
+{
+  "items": [
+    {
+      "text": "string",
+      "type": "single_word | compound_word | collocation | phrasal_verb",
+      "level": "A1 | A2 | B1 | B2 | C1 | C2",
+      "partOfSpeech": "string",
+      "meaningVi": "string",
+      "meaningEn": "string",
+      "exampleEn": "string",
+      "exampleVi": "string",
+      "forms": ["string"],
+      "topics": ["string"],
+      "synonyms": ["string"],
+      "antonyms": ["string"],
+      "wordFamily": ["string"],
+      "autoHighlight": true,
+      "qualityScore": 0.95
+    }
+  ]
+}`;
+
+// ── callAI function ──
+async function callAI(provider, systemPrompt, userContent, attempt = 1) {
+  const url = `${provider.baseUrl}/chat/completions`;
+  const body = JSON.stringify({
+    model: provider.model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userContent  },
+    ],
+    temperature: 0.2,
+    max_tokens: 8000,
+    stream: false,
+  });
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${provider.apiKey}`,
+      },
+      body,
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+
+    const rawText = await resp.text();
+    let content = '';
+
+    if (rawText.includes('data: ')) {
+      // SSE format
+      for (const line of rawText.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const chunk = line.slice('data: '.length).trim();
+        if (chunk === '[DONE]') break;
+        try {
+          const delta = JSON.parse(chunk).choices?.[0]?.delta?.content;
+          if (delta) content += delta;
+        } catch {}
+      }
+    } else {
+      // Standard JSON
+      content = JSON.parse(rawText).choices?.[0]?.message?.content || '';
+    }
+
+    const cleaned = content.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();
+    return JSON.parse(cleaned);
+  } catch (err) {
+    if (attempt < RETRY_MAX) {
+      console.warn(`  ⚠️  Retry ${attempt}/${RETRY_MAX} [${provider.name}]: ${err.message}`);
+      await sleep(3000 * attempt);
+      return callAI(provider, systemPrompt, userContent, attempt + 1);
+    }
+    throw err;
+  }
+}
+
+// ── Process Batch ──
+async function processExpansionBatch(db, provider, batch, batchIndex) {
+  const label = `Batch ${batchIndex} (${batch.length} words)`;
+  console.log(`\n📦 ${label} — generating full records via [${provider.name}]`);
+
+  const inputStr = JSON.stringify(batch.map(text => ({ text })));
+  const userContent = `${EXPAND_SCHEMA_PROMPT}\n\nGenerate full approved dictionary records for these words:\n${inputStr}`;
+
+  let aiResult;
+  try {
+    aiResult = await callAI(provider, EXPAND_SYSTEM_PROMPT, userContent);
+  } catch (err) {
+    console.error(`  ❌ AI call failed for ${label}: ${err.message}`);
+    for (const text of batch) {
+      appendReport({ status: 'ai-error', text, error: err.message });
+    }
+    return { success: 0, failed: batch.length };
+  }
+
+  const items = aiResult?.items || [];
+  let success = 0, failed = 0;
+
+  for (const item of items) {
+    item._enrichedBy = provider.enrichedBy;
+    const errors = validateNewItem(item);
+
+    if (errors.length > 0) {
+      console.warn(`  ⚠️  Validation failed [${item.text || 'unknown'}]: ${errors.join(', ')}`);
+      appendReport({ status: 'validation-failed', text: item.text, errors });
+      failed++;
+      continue;
+    }
+
+    try {
+      const normText = normalizeText(item.text);
+      // Double check if word was inserted by another worker in the meantime
+      const exists = await db.collection('vocabularies').findOne({ normalizedText: normText, deletedAt: null });
+      if (exists) {
+        console.log(`  ℹ️  [${item.text}] already exists in DB, skipping insert.`);
+        success++;
+        continue;
+      }
+
+      const doc = mapToNewVocabularyDoc(item);
+      await db.collection('vocabularies').insertOne(doc);
+      success++;
+      appendReport({ status: 'inserted', text: item.text, provider: provider.name });
+    } catch (err) {
+      console.error(`  ❌ DB write failed [${item.text}]: ${err.message}`);
+      appendReport({ status: 'db-error', text: item.text, error: err.message });
+      failed++;
+    }
+  }
+
+  const missingCount = batch.length - items.length;
+  if (missingCount > 0) {
+    console.warn(`  ⚠️  AI returned ${items.length}/${batch.length} items`);
+    failed += missingCount;
+  }
+
+  console.log(`  ✅ success=${success}, failed=${failed}`);
+  return { success, failed };
+}
+
+// ── Worker Pool ──
+async function runWithWorkers(db, allDocs, processFn, activeWorkers) {
+  const totalBatches = Math.ceil(allDocs.length / BATCH_SIZE);
+  let totalSuccess = 0;
+  let totalFailed  = 0;
+  let completedBatches = 0;
+
+  let batchIndex = 0;
+  const queue = [];
+  for (let i = 0; i < allDocs.length; i += BATCH_SIZE) {
+    queue.push({ batch: allDocs.slice(i, i + BATCH_SIZE), idx: ++batchIndex });
+  }
+
+  const workersCount = activeWorkers.length;
+  console.log(`\n⚡ Starting ${workersCount} parallel worker(s) — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
+  activeWorkers.forEach((w, idx) => {
+    console.log(`   Worker ${idx + 1} → ${w.name}`);
+  });
+  console.log('');
+
+  async function worker(workerId) {
+    const workerConfig = activeWorkers[workerId - 1];
+    const provider = workerConfig.provider;
+    const workerName = workerConfig.name;
+
+    while (queue.length > 0) {
+      const job = queue.shift();
+      if (!job) break;
+
+      const pct = ((completedBatches / totalBatches) * 100).toFixed(1);
+      console.log(`\n🔧 [W${workerId}:${workerName}] Batch ${job.idx}/${totalBatches} (${pct}% done) — ${job.batch.length} words`);
+
+      const t0 = Date.now();
+      const result = await processFn(db, provider, job.batch, job.idx);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+      totalSuccess     += result.success;
+      totalFailed      += result.failed;
+      completedBatches += 1;
+
+      console.log(`   [W${workerId}] ✅ done in ${elapsed}s — +${result.success} inserted/skipped | running total: ${totalSuccess}`);
+
+      await sleep(1000);
+    }
+    console.log(`\n   [W${workerId}] 🏁 Worker finished.`);
+  }
+
+  const workerPromises = activeWorkers.map((_, idx) => worker(idx + 1));
+  await Promise.all(workerPromises);
+
+  return { totalSuccess, totalFailed };
+}
+
+// ── Preflight Ping ──
+async function preflightSelectedProviders(selectedProviders) {
+  console.log(`\n🏓 Preflight: pinging ${selectedProviders.length} selected provider(s)...`);
+
+  async function pingOne(provider) {
+    console.log(`   ► [${provider.name}] ${provider.baseUrl} (model: ${provider.model})`);
+    const t0 = Date.now();
+    try {
+      const resp = await fetch(`${provider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: provider.model,
+          messages: [{ role: 'user', content: 'Reply with exactly one word: hello' }],
+          max_tokens: 20,
+          temperature: 0,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      const latency = Date.now() - t0;
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      }
+
+      const rawText = await resp.text();
+      let reply = '';
+      if (rawText.includes('data: ')) {
+        for (const line of rawText.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const chunk = line.slice('data: '.length).trim();
+          if (chunk === '[DONE]') break;
+          try {
+            const d = JSON.parse(chunk);
+            const delta = d.choices?.[0]?.delta?.content;
+            if (delta) reply += delta;
+          } catch {}
+        }
+      } else {
+        try { reply = JSON.parse(rawText).choices?.[0]?.message?.content?.trim() || ''; } catch {}
+      }
+      console.log(`   ✅ [${provider.name}] OK — reply: "${reply || '(response received)'}" — ${latency}ms`);
+      return { ok: true };
+    } catch (err) {
+      console.error(`   ❌ [${provider.name}] FAILED: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  }
+
+  const results = await Promise.all(selectedProviders.map(p => pingOne(p)));
+  if (results.some(r => !r.ok)) {
+    console.error('\n❌ One or more selected providers failed preflight ping.');
+    process.exit(1);
+  }
+  console.log('✅ All selected providers are reachable and responding!');
+}
+
+// ── Interactive Helper ──
+function askQuestion(query) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise(resolve => rl.question(query, ans => {
+    rl.close();
+    resolve(ans.trim());
+  }));
+}
+
+// ── MAIN ──
+async function main() {
+  if (!MONGODB_URI) {
+    console.error('❌ MONGODB_URI not set in .env');
+    process.exit(1);
+  }
+
+  // 1. Interactive Provider Selection
+  let selectedProviders = [];
+  const concurrencyPerProvider = 10; // 10 parallel slots per provider
+  const cliProvider = (process.argv.find(a => a.startsWith('--provider=')) || '').split('=')[1];
+
+  if (cliProvider) {
+    if (cliProvider === 'deepseek') {
+      selectedProviders = [PROVIDERS[0]];
+    } else if (cliProvider === '9router' || cliProvider === 'claude') {
+      selectedProviders = [PROVIDERS[1]];
+    } else if (cliProvider === 'both') {
+      selectedProviders = PROVIDERS;
+    } else {
+      console.error('❌ Invalid --provider. Use: deepseek | claude | both');
+      process.exit(1);
+    }
+  } else {
+    console.log('\n🤖 Select AI Provider to use for Word Family Expansion:');
+    console.log('   [1] DeepSeek (NINEROUTER) only (10 parallel slots)');
+    console.log('   [2] Claude only (10 parallel slots)');
+    console.log('   [3] Both providers running in parallel (10 slots each, 20 total) (Default)');
+    
+    if (process.stdin.isTTY) {
+      const choice = await askQuestion('👉 Enter choice (1-3): ');
+      if (choice === '1') {
+        selectedProviders = [PROVIDERS[0]];
+      } else if (choice === '2') {
+        selectedProviders = [PROVIDERS[1]];
+      } else {
+        selectedProviders = PROVIDERS;
+      }
+    } else {
+      console.log('   (Non-interactive environment detected, defaulting to BOTH)');
+      selectedProviders = PROVIDERS;
+    }
+  }
+
+  // Build active workers list
+  const activeWorkers = [];
+  selectedProviders.forEach(provider => {
+    for (let i = 0; i < concurrencyPerProvider; i++) {
+      activeWorkers.push({
+        provider,
+        name: `${provider.name} (Slot ${i + 1})`
+      });
+    }
+  });
+
+  // Guard credentials
+  for (const p of selectedProviders) {
+    if (!p.apiKey || !p.baseUrl) {
+      console.error(`\n❌ Missing credentials for selected provider: ${p.name}`);
+      console.error('   Please check NINEROUTER_* or NINEROUTER_9R_* in your .env file.');
+      process.exit(1);
+    }
+  }
+
+  // Preflight check
+  await preflightSelectedProviders(selectedProviders);
+
+  // Connect DB
+  console.log('\n🔗 Connecting to MongoDB...');
+  const client = new MongoClient(MONGODB_URI);
+  await client.connect();
+  const db = client.db();
+  console.log('✅ Connected.');
+
+  // 2. Fetch all existing approved vocabularies
+  console.log('\n🔍 Scanning existing database to build vocabulary index...');
+  const allExistingVocabs = await db.collection('vocabularies')
+    .find({ deletedAt: null }, { projection: { normalizedText: 1, text: 1, wordFamily: 1 } })
+    .toArray();
+
+  const existingWordsSet = new Set();
+  const collectedWordFamilyWords = new Set();
+
+  for (const doc of allExistingVocabs) {
+    if (doc.text) {
+      existingWordsSet.add(normalizeText(doc.text));
+    }
+    if (doc.normalizedText) {
+      existingWordsSet.add(normalizeText(doc.normalizedText));
+    }
+    
+    // Accumulate wordFamily entries
+    if (Array.isArray(doc.wordFamily)) {
+      for (const wf of doc.wordFamily) {
+        if (wf && typeof wf === 'string') {
+          collectedWordFamilyWords.add(normalizeText(wf));
+        }
+      }
+    }
+  }
+
+  console.log(`   Indexed ${existingWordsSet.size.toLocaleString()} unique existing words from DB.`);
+  console.log(`   Collected ${collectedWordFamilyWords.size.toLocaleString()} unique word family terms.`);
+
+  // 3. Find missing word-family words
+  const missingWords = [];
+  for (const wf of collectedWordFamilyWords) {
+    if (!existingWordsSet.has(wf)) {
+      missingWords.push(wf);
+    }
+  }
+
+  console.log(`\n📊 Summary:`);
+  console.log(`   - Existing words in DB: ${existingWordsSet.size.toLocaleString()}`);
+  console.log(`   - Unique word family terms found: ${collectedWordFamilyWords.size.toLocaleString()}`);
+  console.log(`   - Missing terms to insert: ${missingWords.length.toLocaleString()}`);
+
+  if (missingWords.length === 0) {
+    console.log('\n🎉 Perfect! No missing word family terms found. Your vocabulary DB is fully complete!');
+    await client.close();
+    return;
+  }
+
+  // Confirm running
+  if (process.stdin.isTTY) {
+    const confirm = await askQuestion(`\n👉 Do you want to generate full records and insert these ${missingWords.length} missing words now? (y/n): `);
+    if (confirm.toLowerCase() !== 'y') {
+      console.log('❌ Expansion aborted by user.');
+      await client.close();
+      return;
+    }
+  }
+
+  // 4. Run worker pool on missing words
+  console.log(`\n🚀 Starting vocabulary expansion pipeline for ${missingWords.length} words...`);
+  const startTime = Date.now();
+
+  const { totalSuccess, totalFailed } = await runWithWorkers(db, missingWords, processExpansionBatch, activeWorkers);
+
+  const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
+
+  console.log('\n' + '═'.repeat(60));
+  console.log('🏁 EXPANSION COMPLETE');
+  console.log(`   Success/Skipped: ${totalSuccess}`);
+  console.log(`   Failed:          ${totalFailed}`);
+  console.log(`   Total input:     ${missingWords.length}`);
+  console.log(`   Time:            ${elapsed} minutes`);
+  console.log(`   Report:          ${REPORT_FILE}`);
+  console.log('═'.repeat(60));
+
+  await client.close();
+}
+
+main().catch(err => {
+  console.error('💥 Fatal error:', err);
+  process.exit(1);
+});
