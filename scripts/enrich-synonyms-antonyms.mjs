@@ -69,7 +69,7 @@ const PROVIDERS = [
   },
 ];
 
-const BATCH_SIZE  = 20;  // words per AI call — reduced to 20 to prevent output truncation/JSON parse errors
+const BATCH_SIZE  = 10;  // words per AI call — reduced to 10 for perfect JSON stability and zero truncations
 const RETRY_MAX   = 3;   // per-batch retries on parse/network failure
 const REPORT_FILE = 'enrichment_report_synonyms.jsonl';
 
@@ -620,7 +620,7 @@ ${inputStr}`;
 // 8. WORKER POOL
 // ──────────────────────────────────────────
 
-async function runWithWorkers(db, allDocs, processFn, selectedProviders) {
+async function runWithWorkers(db, allDocs, processFn, activeWorkers) {
   const totalBatches = Math.ceil(allDocs.length / BATCH_SIZE);
   let totalSuccess = 0;
   let totalFailed  = 0;
@@ -633,22 +633,25 @@ async function runWithWorkers(db, allDocs, processFn, selectedProviders) {
     queue.push({ batch: allDocs.slice(i, i + BATCH_SIZE), idx: ++batchIndex });
   }
 
-  const workersCount = selectedProviders.length;
+  const workersCount = activeWorkers.length;
   console.log(`\n⚡ Starting ${workersCount} parallel worker(s) — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
-  selectedProviders.forEach((p, idx) => {
-    console.log(`   Worker ${idx + 1} → ${p.name}`);
+  activeWorkers.forEach((w, idx) => {
+    console.log(`   Worker ${idx + 1} → ${w.name}`);
   });
   console.log('');
 
-  // Each worker is permanently bound to its own selected provider
+  // Each worker pulls from the queue and uses its designated provider slot
   async function worker(workerId) {
-    const provider = selectedProviders[workerId - 1];
+    const workerConfig = activeWorkers[workerId - 1];
+    const provider = workerConfig.provider;
+    const workerName = workerConfig.name;
+
     while (queue.length > 0) {
       const job = queue.shift();
       if (!job) break;
 
       const pct = ((completedBatches / totalBatches) * 100).toFixed(1);
-      console.log(`\n🔧 [W${workerId}:${provider.name}] Batch ${job.idx}/${totalBatches} (${pct}% done) — ${job.batch.length} words`);
+      console.log(`\n🔧 [W${workerId}:${workerName}] Batch ${job.idx}/${totalBatches} (${pct}% done) — ${job.batch.length} words`);
 
       const t0 = Date.now();
       const result = await processFn(db, provider, job.batch, job.idx);
@@ -660,13 +663,14 @@ async function runWithWorkers(db, allDocs, processFn, selectedProviders) {
 
       console.log(`   [W${workerId}] ✅ done in ${elapsed}s — +${result.success} updated | running total: ${totalSuccess}`);
 
-      await sleep(500);
+      // Small delay between calls to be respectful to rate limits
+      await sleep(1000);
     }
     console.log(`\n   [W${workerId}] 🏁 Worker finished.`);
   }
 
-  // Launch workers simultaneously (1 worker per selected provider)
-  const workerPromises = selectedProviders.map((_, idx) => worker(idx + 1));
+  // Launch workers simultaneously
+  const workerPromises = activeWorkers.map((_, idx) => worker(idx + 1));
   await Promise.all(workerPromises);
 
   return { totalSuccess, totalFailed };
@@ -799,6 +803,18 @@ async function main() {
     }
   }
 
+  // Build active workers list (each selected provider gets 2 slots running in parallel)
+  const CONCURRENCY_PER_PROVIDER = 2;
+  const activeWorkers = [];
+  selectedProviders.forEach(provider => {
+    for (let i = 0; i < CONCURRENCY_PER_PROVIDER; i++) {
+      activeWorkers.push({
+        provider,
+        name: `${provider.name} (Slot ${i + 1})`
+      });
+    }
+  });
+
   // ── Guard: check selected providers have credentials ──
   for (const p of selectedProviders) {
     if (!p.apiKey || !p.baseUrl) {
@@ -840,7 +856,7 @@ async function main() {
   else if (mode === 'relations-only') processFn = processRelationsOnlyBatch;
   else if (mode === 'word-family')    processFn = processWordFamilyBatch;
 
-  const { totalSuccess, totalFailed } = await runWithWorkers(db, docs, processFn, selectedProviders);
+  const { totalSuccess, totalFailed } = await runWithWorkers(db, docs, processFn, activeWorkers);
 
   const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
 
