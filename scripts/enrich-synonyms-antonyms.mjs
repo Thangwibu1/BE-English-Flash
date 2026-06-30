@@ -21,6 +21,7 @@
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
 import { MongoClient, ObjectId } from 'mongodb';
+import readline from 'readline';
 
 // ──────────────────────────────────────────
 // 0. CONFIG
@@ -82,7 +83,6 @@ if (!['fix-and-relations', 'relations-only', 'word-family'].includes(mode)) {
 }
 
 console.log(`\n🚀 Mode: ${mode}${DRY_RUN ? ' [DRY RUN]' : ''}`);
-console.log(`   Batch size: ${BATCH_SIZE}, Workers: 2 (DeepSeek + 9Router)`);
 
 // ──────────────────────────────────────────
 // 1. HELPERS
@@ -620,7 +620,7 @@ ${inputStr}`;
 // 8. WORKER POOL
 // ──────────────────────────────────────────
 
-async function runWithWorkers(db, allDocs, processFn) {
+async function runWithWorkers(db, allDocs, processFn, selectedProviders) {
   const totalBatches = Math.ceil(allDocs.length / BATCH_SIZE);
   let totalSuccess = 0;
   let totalFailed  = 0;
@@ -633,13 +633,16 @@ async function runWithWorkers(db, allDocs, processFn) {
     queue.push({ batch: allDocs.slice(i, i + BATCH_SIZE), idx: ++batchIndex });
   }
 
-  console.log(`\n⚡ Starting 2 parallel workers — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
-  console.log(`   Worker 1 → ${PROVIDERS[0].name}`);
-  console.log(`   Worker 2 → ${PROVIDERS[1].name}\n`);
+  const workersCount = selectedProviders.length;
+  console.log(`\n⚡ Starting ${workersCount} parallel worker(s) — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
+  selectedProviders.forEach((p, idx) => {
+    console.log(`   Worker ${idx + 1} → ${p.name}`);
+  });
+  console.log('');
 
-  // Each worker is permanently bound to its own provider
+  // Each worker is permanently bound to its own selected provider
   async function worker(workerId) {
-    const provider = PROVIDERS[workerId - 1]; // W1→PROVIDERS[0], W2→PROVIDERS[1]
+    const provider = selectedProviders[workerId - 1];
     while (queue.length > 0) {
       const job = queue.shift();
       if (!job) break;
@@ -662,8 +665,9 @@ async function runWithWorkers(db, allDocs, processFn) {
     console.log(`\n   [W${workerId}] 🏁 Worker finished.`);
   }
 
-  // Launch both workers simultaneously — each uses its own AI provider
-  await Promise.all([worker(1), worker(2)]);
+  // Launch workers simultaneously (1 worker per selected provider)
+  const workerPromises = selectedProviders.map((_, idx) => worker(idx + 1));
+  await Promise.all(workerPromises);
 
   return { totalSuccess, totalFailed };
 }
@@ -673,11 +677,11 @@ async function runWithWorkers(db, allDocs, processFn) {
 // ──────────────────────────────────────────
 
 /**
- * Ping both AI providers simultaneously.
- * Both must respond before any DB work starts.
+ * Ping selected AI providers simultaneously.
+ * They must respond before any DB work starts.
  */
-async function preflightBothProviders() {
-  console.log('\n🏓 Preflight: pinging BOTH providers simultaneously...');
+async function preflightSelectedProviders(selectedProviders) {
+  console.log(`\n🏓 Preflight: pinging ${selectedProviders.length} selected provider(s)...`);
 
   async function pingOne(provider) {
     console.log(`   ► [${provider.name}] ${provider.baseUrl} (model: ${provider.model})`);
@@ -692,8 +696,9 @@ async function preflightBothProviders() {
         body: JSON.stringify({
           model: provider.model,
           messages: [{ role: 'user', content: 'Reply with exactly one word: hello' }],
-          max_tokens: 10,
+          max_tokens: 20,
           temperature: 0,
+          stream: false,
         }),
         signal: AbortSignal.timeout(30_000),
       });
@@ -726,37 +731,85 @@ async function preflightBothProviders() {
     }
   }
 
-  // Ping both at the same time
-  const [r1, r2] = await Promise.all([
-    pingOne(PROVIDERS[0]),
-    pingOne(PROVIDERS[1]),
-  ]);
+  // Ping selected at the same time
+  const results = await Promise.all(selectedProviders.map(p => pingOne(p)));
+  const failedCount = results.filter(r => !r.ok).length;
 
-  if (!r1.ok || !r2.ok) {
-    console.error('\n❌ One or more providers failed preflight ping.');
+  if (failedCount > 0) {
+    console.error('\n❌ One or more selected providers failed preflight ping.');
     console.error('   Fix the failing provider before running the enrichment job.');
     process.exit(1);
   }
 
-  console.log('\n✅ Both providers are reachable and responding!');
+  console.log('✅ All selected providers are reachable and responding!');
 }
 
 // ──────────────────────────────────────────
 // 10. MAIN
 // ──────────────────────────────────────────
 
+// Helper for interactive choice
+function askQuestion(query) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise(resolve => rl.question(query, ans => {
+    rl.close();
+    resolve(ans.trim());
+  }));
+}
+
 async function main() {
-  // ── Guard: check both providers have credentials ──
-  for (const p of PROVIDERS) {
+  // Parse CLI provider selection
+  let selectedProviders = [];
+  const cliProvider = (process.argv.find(a => a.startsWith('--provider=')) || '').split('=')[1];
+
+  if (cliProvider) {
+    if (cliProvider === 'deepseek') {
+      selectedProviders = [PROVIDERS[0]];
+    } else if (cliProvider === '9router') {
+      selectedProviders = [PROVIDERS[1]];
+    } else if (cliProvider === 'both') {
+      selectedProviders = PROVIDERS;
+    } else {
+      console.error('❌ Invalid --provider. Use: deepseek | 9router | both');
+      process.exit(1);
+    }
+  } else {
+    // Interactive selection prompt
+    console.log('\n🤖 Select AI Provider to use:');
+    console.log('   [1] DeepSeek (NINEROUTER) only');
+    console.log('   [2] 9Router (ngocthang.io.vn) only');
+    console.log('   [3] Both providers running in parallel (Default)');
+    
+    // Check if process.stdin is a TTY (interactive) or if we should skip in non-interactive environment
+    if (process.stdin.isTTY) {
+      const choice = await askQuestion('👉 Enter choice (1-3): ');
+      if (choice === '1') {
+        selectedProviders = [PROVIDERS[0]];
+      } else if (choice === '2') {
+        selectedProviders = [PROVIDERS[1]];
+      } else {
+        selectedProviders = PROVIDERS;
+      }
+    } else {
+      console.log('   (Non-interactive environment detected, defaulting to BOTH)');
+      selectedProviders = PROVIDERS;
+    }
+  }
+
+  // ── Guard: check selected providers have credentials ──
+  for (const p of selectedProviders) {
     if (!p.apiKey || !p.baseUrl) {
-      console.error(`\n❌ Missing credentials for provider: ${p.name}`);
-      console.error('   Check NINEROUTER_* and NINEROUTER_9R_* in .env');
+      console.error(`\n❌ Missing credentials for selected provider: ${p.name}`);
+      console.error('   Please ensure NINEROUTER_* or NINEROUTER_9R_* are set in .env');
       process.exit(1);
     }
   }
 
-  // ── Phase 0: Preflight — ping BOTH providers before touching DB ──
-  await preflightBothProviders();
+  // ── Phase 0: Preflight — ping selected providers before touching DB ──
+  await preflightSelectedProviders(selectedProviders);
 
   console.log('\n🔗 Connecting to MongoDB...');
   const client = new MongoClient(MONGODB_URI);
@@ -787,7 +840,7 @@ async function main() {
   else if (mode === 'relations-only') processFn = processRelationsOnlyBatch;
   else if (mode === 'word-family')    processFn = processWordFamilyBatch;
 
-  const { totalSuccess, totalFailed } = await runWithWorkers(db, docs, processFn);
+  const { totalSuccess, totalFailed } = await runWithWorkers(db, docs, processFn, selectedProviders);
 
   const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
 
