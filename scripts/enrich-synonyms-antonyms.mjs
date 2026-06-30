@@ -292,6 +292,7 @@ async function callAI(provider, systemPrompt, userContent, attempt = 1) {
     ],
     temperature: 0.2,
     max_tokens: 8000,
+    stream: false, // explicitly disable streaming
   });
 
   try {
@@ -310,8 +311,28 @@ async function callAI(provider, systemPrompt, userContent, attempt = 1) {
       throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
     }
 
-    const data = await resp.json();
-    const content = data.choices?.[0]?.message?.content || '';
+    const rawText = await resp.text();
+
+    // Handle SSE streaming format (some providers stream even with stream:false)
+    let content = '';
+    if (rawText.includes('data: ')) {
+      // SSE format — concatenate all delta content
+      const lines = rawText.split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const chunk = line.slice('data: '.length).trim();
+        if (chunk === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(chunk);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) content += delta;
+        } catch { /* skip malformed chunks */ }
+      }
+    } else {
+      // Standard JSON format
+      const data = JSON.parse(rawText);
+      content = data.choices?.[0]?.message?.content || '';
+    }
 
     // Strip markdown fences if AI adds them anyway
     const cleaned = content.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();

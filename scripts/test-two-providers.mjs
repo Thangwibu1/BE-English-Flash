@@ -70,6 +70,7 @@ async function callProvider(provider, systemPrompt, userContent) {
       ],
       temperature: 0.2,
       max_tokens: 4000,
+      stream: false,  // explicitly disable streaming
     }),
     signal: AbortSignal.timeout(90_000),
   });
@@ -81,8 +82,29 @@ async function callProvider(provider, systemPrompt, userContent) {
     throw new Error(`HTTP ${resp.status}: ${body.slice(0, 300)}`);
   }
 
-  const data = await resp.json();
-  const content = data.choices?.[0]?.message?.content || '';
+  const rawText = await resp.text();
+
+  // Handle SSE streaming format: lines starting with "data: "
+  let content = '';
+  if (rawText.includes('data: ')) {
+    // SSE format — concatenate all delta content
+    const lines = rawText.split('\n');
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const chunk = line.slice('data: '.length).trim();
+      if (chunk === '[DONE]') break;
+      try {
+        const parsed = JSON.parse(chunk);
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) content += delta;
+      } catch { /* skip malformed chunks */ }
+    }
+  } else {
+    // Standard JSON format
+    const data = JSON.parse(rawText);
+    content = data.choices?.[0]?.message?.content || '';
+  }
+
   const cleaned = stripFences(content);
 
   return { parsed: JSON.parse(cleaned), latency, rawContent: content };
@@ -105,8 +127,9 @@ async function pingProvider(provider) {
       body: JSON.stringify({
         model: provider.model,
         messages: [{ role: 'user', content: 'Reply with exactly one word: hello' }],
-        max_tokens: 10,
+        max_tokens: 20,
         temperature: 0,
+        stream: false,
       }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -117,9 +140,30 @@ async function pingProvider(provider) {
       throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
     }
 
-    const data = await resp.json();
-    const reply = data.choices?.[0]?.message?.content?.trim() || '(empty)';
-    console.log(`   ✅ PING OK — reply: "${reply}" — latency: ${latency}ms`);
+    const rawText = await resp.text();
+
+    // Handle both SSE streaming and standard JSON responses
+    let reply = '';
+    if (rawText.includes('data: ')) {
+      // SSE format
+      const lines = rawText.split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const chunk = line.slice('data: '.length).trim();
+        if (chunk === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(chunk);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) reply += delta;
+        } catch { /* skip */ }
+      }
+    } else {
+      const data = JSON.parse(rawText);
+      reply = data.choices?.[0]?.message?.content?.trim() || '';
+    }
+
+    // Accept any response as OK (model may choose any reply word)
+    console.log(`   ✅ PING OK — reply: "${reply || '(response received)'}" — latency: ${latency}ms`);
     return true;
   } catch (err) {
     console.error(`   ❌ PING FAILED: ${err.message}`);
