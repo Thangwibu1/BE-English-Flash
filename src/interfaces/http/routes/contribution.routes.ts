@@ -6,6 +6,7 @@ import { VocabularyModel } from '../../../infrastructure/database/mongoose/model
 import { ReadingModel } from '../../../infrastructure/database/mongoose/models/ReadingModel';
 import { AppError } from '../../../core/errors/AppError';
 import { buildContainer } from '../../../shared/container/buildContainer';
+import { TopicModel } from '../../../infrastructure/database/mongoose/models/TopicModel';
 
 const router = Router();
 
@@ -127,6 +128,8 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
 
           const exists = await VocabularyModel.findOne({ normalizedText, deletedAt: null });
           if (!exists) {
+            const topicIds = await resolveTopicIds(sv.topicIds || sv.topics, contrib.submittedBy.toString());
+
             await VocabularyModel.create({
               text: sv.text,
               normalizedText,
@@ -141,7 +144,7 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
               forms: sv.forms?.length
                 ? sv.forms.map((f: string) => ({ formText: f, normalizedFormText: f.trim().toLowerCase() }))
                 : [{ formText: sv.text, normalizedFormText: normalizedText }],
-              topicIds: sv.topicIds || sv.topics || [],
+              topicIds,
               status: 'approved',
               createdBy: contrib.submittedBy,
             });
@@ -164,13 +167,15 @@ router.post('/:id/approve', authMiddleware, requireRole('admin'), async (req: Re
           count++;
         }
 
+        const readingTopicIds = await resolveTopicIds(payload.topicIds || payload.topics, contrib.submittedBy.toString());
+
         const reading = await ReadingModel.create({
           title: payload.title,
           slug,
           subtitle: payload.subtitle || undefined,
           content: payload.bodyText || payload.content,
           level: payload.level,
-          topicIds: payload.topicIds || payload.topics || [],
+          topicIds: readingTopicIds,
           source: payload.source || 'user_contribution',
           estimatedReadingTimeMinutes: payload.estimatedReadingTimeMinutes || 0,
           spans: [],
@@ -233,6 +238,79 @@ router.post('/:id/reject', authMiddleware, requireRole('admin'), async (req: Req
     next(error);
   }
 });
+
+async function resolveTopicIds(
+  topicInput: any,
+  submittedBy: string
+): Promise<mongoose.Types.ObjectId[]> {
+  if (!topicInput) return [];
+
+  let rawTopics: string[] = [];
+
+  if (typeof topicInput === 'string') {
+    const trimmed = topicInput.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const normalizedJson = trimmed.replace(/'/g, '"');
+        const parsed = JSON.parse(normalizedJson);
+        if (Array.isArray(parsed)) {
+          rawTopics = parsed.map(t => String(t).trim());
+        }
+      } catch {
+        const cleaned = trimmed.slice(1, -1).replace(/['"]/g, '').trim();
+        if (cleaned) {
+          rawTopics = cleaned.split(',').map(t => t.trim());
+        }
+      }
+    } else {
+      rawTopics = [trimmed];
+    }
+  } else if (Array.isArray(topicInput)) {
+    rawTopics = topicInput.map(t => String(t).trim());
+  } else {
+    rawTopics = [String(topicInput).trim()];
+  }
+
+  const resolvedIds: mongoose.Types.ObjectId[] = [];
+
+  for (const topicStr of rawTopics) {
+    if (!topicStr) continue;
+
+    if (mongoose.Types.ObjectId.isValid(topicStr)) {
+      resolvedIds.push(new mongoose.Types.ObjectId(topicStr));
+      continue;
+    }
+
+    const name = topicStr;
+    const slug = topicStr
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+
+    try {
+      let topicDoc = await TopicModel.findOne({
+        $or: [{ slug }, { name: { $regex: new RegExp(`^${name}$`, 'i') } }],
+        deletedAt: null,
+      });
+
+      if (!topicDoc) {
+        topicDoc = await TopicModel.create({
+          name: name.charAt(0).toUpperCase() + name.slice(1),
+          slug,
+          createdBy: new mongoose.Types.ObjectId(submittedBy),
+          updatedBy: new mongoose.Types.ObjectId(submittedBy),
+        });
+      }
+
+      resolvedIds.push(topicDoc._id as mongoose.Types.ObjectId);
+    } catch (err) {
+      console.error(`Failed to resolve or create topic: "${topicStr}"`, err);
+    }
+  }
+
+  return resolvedIds;
+}
 
 import mongoose from 'mongoose';
 export { router as contributionRoutes };
