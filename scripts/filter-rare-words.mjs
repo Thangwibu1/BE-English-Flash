@@ -1,11 +1,14 @@
 /**
- * AuraEnglish — Filter Out Rare/Obscure Words
+ * AuraEnglish — Filter Out Rare/Obscure Words (Robust Version)
  *
  * This script reads `missing_word_family_list.json` and uses the AI (DeepSeek)
  * to filter out extremely rare, obscure, highly technical jargon, or non-standard inflections,
  * keeping only standard, useful vocabulary for English learners (CEFR A1-C2).
  *
- * It processes the list in parallel batches of 500 words to be extremely fast and cost-effective.
+ * Updates:
+ * - Processes batches sequentially with a polite delay to avoid rate limit bans.
+ * - If a batch fails after all retries, it keeps the original words of that batch as a fallback (no data loss!).
+ * - Safe-guard: Never overwrites the file if the filtered list is empty.
  *
  * Usage:
  *   node scripts/filter-rare-words.mjs
@@ -36,53 +39,67 @@ const BASE_URL = process.env.NINEROUTER_BASE_URL;
 const MODEL    = process.env.NINEROUTER_MODEL || 'deepseek-v4-flash';
 const FILE_PATH = 'missing_word_family_list.json';
 
-const CHUNK_SIZE = 500;
+const CHUNK_SIZE = 250; // Smaller chunk size for perfect safety and zero truncation
+const RETRY_MAX = 3;
 
-async function callAI(systemPrompt, userContent) {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function callAI(systemPrompt, userContent, attempt = 1) {
   const url = `${BASE_URL}/chat/completions`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userContent  },
-      ],
-      temperature: 0,
-      max_tokens: 4000,
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userContent  },
+        ],
+        temperature: 0,
+        max_tokens: 4000,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
-  }
-
-  const rawText = await resp.text();
-  let content = '';
-
-  if (rawText.includes('data: ')) {
-    for (const line of rawText.split('\n')) {
-      if (!line.startsWith('data: ')) continue;
-      const chunk = line.slice('data: '.length).trim();
-      if (chunk === '[DONE]') break;
-      try {
-        const delta = JSON.parse(chunk).choices?.[0]?.delta?.content;
-        if (delta) content += delta;
-      } catch {}
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
     }
-  } else {
-    content = JSON.parse(rawText).choices?.[0]?.message?.content || '';
-  }
 
-  const cleaned = content.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();
-  return JSON.parse(cleaned);
+    const rawText = await resp.text();
+    let content = '';
+
+    if (rawText.includes('data: ')) {
+      for (const line of rawText.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const chunk = line.slice('data: '.length).trim();
+        if (chunk === '[DONE]') break;
+        try {
+          const delta = JSON.parse(chunk).choices?.[0]?.delta?.content;
+          if (delta) content += delta;
+        } catch {}
+      }
+    } else {
+      content = JSON.parse(rawText).choices?.[0]?.message?.content || '';
+    }
+
+    const cleaned = content.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();
+    return JSON.parse(cleaned);
+  } catch (err) {
+    if (attempt < RETRY_MAX) {
+      console.warn(`  ⚠️  [Attempt ${attempt}/${RETRY_MAX}] Failed: ${err.message}. Retrying in 4s...`);
+      await sleep(4000);
+      return callAI(systemPrompt, userContent, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 const SYSTEM_PROMPT = `You are a lexicographer filtering a list of vocabulary words for Vietnamese English learners (CEFR level A1 to C2).
@@ -113,33 +130,53 @@ async function main() {
   const words = JSON.parse(readFileSync(FILE_PATH, 'utf8'));
   console.log(`\n📖 Loaded ${words.length.toLocaleString()} words to filter.`);
 
+  if (words.length === 0) {
+    console.log('🎉 List is empty. Nothing to do!');
+    process.exit(0);
+  }
+
   const batches = [];
   for (let i = 0; i < words.length; i += CHUNK_SIZE) {
     batches.push(words.slice(i, i + CHUNK_SIZE));
   }
 
-  console.log(`🚀 Processing in ${batches.length} parallel batches of up to ${CHUNK_SIZE} words via DeepSeek...`);
+  console.log(`🚀 Processing ${batches.length} batches sequentially (250 words/batch) to avoid rate limits...`);
   const startTime = Date.now();
 
-  const results = await Promise.all(
-    batches.map(async (batch, idx) => {
-      const userContent = `Filter this list of ${batch.length} words:\n${JSON.stringify(batch)}`;
-      try {
-        const filtered = await callAI(SYSTEM_PROMPT, userContent);
-        if (Array.isArray(filtered)) {
-          console.log(`   ✅ Batch ${idx + 1}/${batches.length} complete: ${batch.length} -> ${filtered.length} words`);
-          return filtered;
-        }
-        console.warn(`   ⚠️  Batch ${idx + 1} did not return an array. Falling back to empty.`);
-        return [];
-      } catch (err) {
-        console.error(`   ❌ Batch ${idx + 1} failed: ${err.message}`);
-        return [];
-      }
-    })
-  );
+  const cleanWords = [];
 
-  const cleanWords = results.flat();
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const userContent = `Filter this list of ${batch.length} words:\n${JSON.stringify(batch)}`;
+    
+    console.log(`\n⏳ Batch ${i + 1}/${batches.length} (${batch.length} words)...`);
+    
+    let filtered = [];
+    try {
+      filtered = await callAI(SYSTEM_PROMPT, userContent);
+      if (Array.isArray(filtered)) {
+        console.log(`   ✅ Success: ${batch.length} -> ${filtered.length} words`);
+      } else {
+        throw new Error('AI response is not a valid JSON array.');
+      }
+    } catch (err) {
+      console.error(`   ❌ Failed after all attempts: ${err.message}`);
+      console.error(`      Fallback: keeping all ${batch.length} original words of this batch.`);
+      filtered = batch;
+    }
+    
+    cleanWords.push(...filtered);
+    
+    // Polite cooldown to prevent rate limit triggers
+    await sleep(2000);
+  }
+
+  // Safety guard: Never write if the resulting array is completely empty (something went wrong)
+  if (cleanWords.length === 0) {
+    console.error('\n❌ Error: The filtered list is empty. Aborting write to prevent data corruption.');
+    process.exit(1);
+  }
+
   const removedCount = words.length - cleanWords.length;
   const pct = ((removedCount / words.length) * 100).toFixed(1);
 
@@ -152,7 +189,7 @@ async function main() {
   console.log(`   Filtered count: ${cleanWords.length.toLocaleString()}`);
   console.log(`   Removed words:  ${removedCount.toLocaleString()} (${pct}%)`);
   console.log(`   Saved file:     ${FILE_PATH}`);
-  console.log(`   Time taken:     ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+  console.log(`   Time taken:     ${((Date.now() - startTime) / 1000 / 60).toFixed(1)} minutes`);
   console.log('═'.repeat(60));
 }
 
