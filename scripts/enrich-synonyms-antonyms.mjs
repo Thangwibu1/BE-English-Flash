@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AuraEnglish — Synonym/Antonym Enrichment Script
  * Follows: auraenglish_approved_vocab_synonym_antonym_enrichment_spec.md
  *
@@ -68,7 +68,7 @@ const PROVIDERS = [
   },
 ];
 
-const BATCH_SIZE  = 80;  // words per AI call — spec Section 18 recommends 80
+const BATCH_SIZE  = 30;  // words per AI call — reduced from 80 to prevent output truncation/JSON parse errors
 const RETRY_MAX   = 3;   // per-batch retries on parse/network failure
 const REPORT_FILE = 'enrichment_report_synonyms.jsonl';
 
