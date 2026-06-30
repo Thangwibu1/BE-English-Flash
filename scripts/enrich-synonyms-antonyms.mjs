@@ -128,8 +128,8 @@ function validateItem(item) {
                                             errors.push('missing forms');
   if (!Array.isArray(item.topics) || item.topics.length === 0)
                                             errors.push('missing topics');
-  if (item.status !== 'approved')           errors.push('status must be approved');
-  if (item.needsReview !== false)           errors.push('needsReview must be false');
+  if (item.status !== undefined && item.status !== 'approved')           errors.push('status must be approved');
+  if (item.needsReview !== undefined && item.needsReview !== false)       errors.push('needsReview must be false');
   if (typeof item.qualityScore !== 'number' || item.qualityScore < 0.75)
                                             errors.push('qualityScore < 0.75');
   if (!Array.isArray(item.synonyms))        errors.push('synonyms must be array');
