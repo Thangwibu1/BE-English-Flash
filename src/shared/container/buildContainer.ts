@@ -91,9 +91,9 @@ export function buildContainer() {
   const aiVocabularySuggestionRepository = new MongoAiVocabularySuggestionRepository();
   
   const aiProviderService = new NineRouterAIProvider({
-    apiKey: process.env.NINEROUTER_API_KEY || '',
-    baseUrl: process.env.NINEROUTER_BASE_URL || 'https://api.nine-router.com/v1',
-    model: process.env.NINEROUTER_MODEL || 'google/gemini-flash-1.5',
+    apiKey: process.env.NINEROUTER_9R_API_KEY || '',
+    baseUrl: process.env.NINEROUTER_9R_BASE_URL || 'https://aishop24h.com/v1',
+    model: process.env.NINEROUTER_9R_MODEL || 'z-ai/glm-5.2',
   });
   
   const readingPreprocessor = new SimpleReadingPreprocessor();

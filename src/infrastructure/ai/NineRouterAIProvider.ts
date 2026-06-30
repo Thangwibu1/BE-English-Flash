@@ -49,7 +49,17 @@ export class NineRouterAIProvider implements AIProviderService {
     }
 
     const data = await res.json() as any;
-    const message = data?.choices?.[0]?.message?.content;
+    let message = data?.choices?.[0]?.message?.content;
+
+    if (!message && data?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+      const argsStr = data.choices[0].message.tool_calls[0].function.arguments;
+      try {
+        const parsedArgs = JSON.parse(argsStr);
+        message = parsedArgs.response || parsedArgs.content || argsStr;
+      } catch {
+        message = argsStr;
+      }
+    }
 
     if (!message) {
       throw new Error('9Router returned empty content');
@@ -110,7 +120,17 @@ export class NineRouterAIProvider implements AIProviderService {
     }
 
     const data = await res.json() as any;
-    const message = data?.choices?.[0]?.message?.content;
+    let message = data?.choices?.[0]?.message?.content;
+
+    if (!message && data?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+      const argsStr = data.choices[0].message.tool_calls[0].function.arguments;
+      try {
+        const parsedArgs = JSON.parse(argsStr);
+        message = parsedArgs.response || parsedArgs.content || argsStr;
+      } catch {
+        message = argsStr;
+      }
+    }
 
     if (!message) {
       throw new Error('9Router returned empty content');
