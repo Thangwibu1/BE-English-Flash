@@ -1,20 +1,21 @@
 /**
- * AuraEnglish — Filter Out Rare/Obscure Words (Robust Version)
+ * AuraEnglish — Filter Out Rare/Obscure Words (Interactive Version)
  *
- * This script reads `missing_word_family_list.json` and uses the AI (DeepSeek)
- * to filter out extremely rare, obscure, highly technical jargon, or non-standard inflections,
- * keeping only standard, useful vocabulary for English learners (CEFR A1-C2).
+ * This script reads `missing_word_family_list.json` and uses the selected AI provider
+ * (DeepSeek or Claude) to filter out extremely rare, obscure, highly technical jargon,
+ * or plain plural/inflection words, keeping only standard vocabulary for learners (CEFR A1-C2).
  *
- * Updates:
- * - Processes batches sequentially with a polite delay to avoid rate limit bans.
- * - If a batch fails after all retries, it keeps the original words of that batch as a fallback (no data loss!).
- * - Safe-guard: Never overwrites the file if the filtered list is empty.
+ * It processes the list sequentially in batches of 200 words with a cooldown.
+ * If a batch fails, it keeps the original words as a fallback.
  *
  * Usage:
  *   node scripts/filter-rare-words.mjs
+ *   node scripts/filter-rare-words.mjs --provider=deepseek
+ *   node scripts/filter-rare-words.mjs --provider=claude
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
+import readline from 'readline';
 
 // ── Load .env ──
 const ENV_PATH = new URL('../.env', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
@@ -34,29 +35,42 @@ function loadEnv(path) {
 loadEnv(ENV_PATH);
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const API_KEY  = process.env.NINEROUTER_API_KEY;
-const BASE_URL = process.env.NINEROUTER_BASE_URL;
-const MODEL    = process.env.NINEROUTER_MODEL || 'deepseek-v4-flash';
-const FILE_PATH = 'missing_word_family_list.json';
+// ── Providers Config ──
+const PROVIDERS = [
+  {
+    name:      'DeepSeek (NINEROUTER)',
+    apiKey:    process.env.NINEROUTER_API_KEY,
+    baseUrl:   process.env.NINEROUTER_BASE_URL,
+    model:     process.env.NINEROUTER_MODEL    || 'deepseek-v4-flash',
+  },
+  {
+    name:      'Claude',
+    apiKey:    process.env.NINEROUTER_9R_API_KEY,
+    baseUrl:   process.env.NINEROUTER_9R_BASE_URL,
+    model:     process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet',
+  },
+];
 
-const CHUNK_SIZE = 250; // Smaller chunk size for perfect safety and zero truncation
+const FILE_PATH = 'missing_word_family_list.json';
+const CHUNK_SIZE = 200; // 200 words is very safe and fast
 const RETRY_MAX = 3;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function callAI(systemPrompt, userContent, attempt = 1) {
-  const url = `${BASE_URL}/chat/completions`;
+// ── AI Call ──
+async function callAI(provider, systemPrompt, userContent, attempt = 1) {
+  const url = `${provider.baseUrl}/chat/completions`;
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${API_KEY}`,
+        Authorization: `Bearer ${provider.apiKey}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: provider.model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user',   content: userContent  },
@@ -77,6 +91,7 @@ async function callAI(systemPrompt, userContent, attempt = 1) {
     let content = '';
 
     if (rawText.includes('data: ')) {
+      // SSE format
       for (const line of rawText.split('\n')) {
         if (!line.startsWith('data: ')) continue;
         const chunk = line.slice('data: '.length).trim();
@@ -87,6 +102,7 @@ async function callAI(systemPrompt, userContent, attempt = 1) {
         } catch {}
       }
     } else {
+      // Standard JSON
       content = JSON.parse(rawText).choices?.[0]?.message?.content || '';
     }
 
@@ -94,9 +110,9 @@ async function callAI(systemPrompt, userContent, attempt = 1) {
     return JSON.parse(cleaned);
   } catch (err) {
     if (attempt < RETRY_MAX) {
-      console.warn(`  ⚠️  [Attempt ${attempt}/${RETRY_MAX}] Failed: ${err.message}. Retrying in 4s...`);
+      console.warn(`  ⚠️  [Attempt ${attempt}/${RETRY_MAX} on ${provider.name}] Failed: ${err.message}. Retrying in 4s...`);
       await sleep(4000);
-      return callAI(systemPrompt, userContent, attempt + 1);
+      return callAI(provider, systemPrompt, userContent, attempt + 1);
     }
     throw err;
   }
@@ -116,12 +132,19 @@ Strictly KEEP:
 
 Return ONLY a valid JSON array of strings containing the filtered words. Do not include markdown formatting or explanation.`;
 
-async function main() {
-  if (!API_KEY || !BASE_URL) {
-    console.error('❌ Missing DeepSeek credentials in .env (NINEROUTER_API_KEY / NINEROUTER_BASE_URL).');
-    process.exit(1);
-  }
+// ── Interactive Helper ──
+function askQuestion(query) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise(resolve => rl.question(query, ans => {
+    rl.close();
+    resolve(ans.trim());
+  }));
+}
 
+async function main() {
   if (!existsSync(FILE_PATH)) {
     console.error(`❌ File "${FILE_PATH}" not found.`);
     process.exit(1);
@@ -135,12 +158,51 @@ async function main() {
     process.exit(0);
   }
 
+  // 1. Choose provider
+  let provider;
+  const cliProvider = (process.argv.find(a => a.startsWith('--provider=')) || '').split('=')[1];
+
+  if (cliProvider) {
+    if (cliProvider === 'deepseek') {
+      provider = PROVIDERS[0];
+    } else if (cliProvider === '9router' || cliProvider === 'claude') {
+      provider = PROVIDERS[1];
+    } else {
+      console.error('❌ Invalid --provider. Use: deepseek | claude');
+      process.exit(1);
+    }
+  } else {
+    console.log('\n🤖 Select AI Provider to use for Filtering:');
+    console.log('   [1] DeepSeek (NINEROUTER)');
+    console.log('   [2] Claude (Default)');
+    
+    if (process.stdin.isTTY) {
+      const choice = await askQuestion('👉 Enter choice (1-2): ');
+      if (choice === '1') {
+        provider = PROVIDERS[0];
+      } else {
+        provider = PROVIDERS[1];
+      }
+    } else {
+      console.log('   (Non-interactive environment detected, defaulting to Claude)');
+      provider = PROVIDERS[1];
+    }
+  }
+
+  // Guard key
+  if (!provider.apiKey || !provider.baseUrl) {
+    console.error(`\n❌ Missing credentials for selected provider: ${provider.name}`);
+    console.error('   Please check NINEROUTER_* or NINEROUTER_9R_* in your .env file.');
+    process.exit(1);
+  }
+
   const batches = [];
   for (let i = 0; i < words.length; i += CHUNK_SIZE) {
     batches.push(words.slice(i, i + CHUNK_SIZE));
   }
 
-  console.log(`🚀 Processing ${batches.length} batches sequentially (250 words/batch) to avoid rate limits...`);
+  console.log(`🚀 Using provider: ${provider.name} (${provider.model})`);
+  console.log(`🚀 Processing ${batches.length} batches sequentially (${CHUNK_SIZE} words/batch)...`);
   const startTime = Date.now();
 
   const cleanWords = [];
@@ -153,7 +215,7 @@ async function main() {
     
     let filtered = [];
     try {
-      filtered = await callAI(SYSTEM_PROMPT, userContent);
+      filtered = await callAI(provider, SYSTEM_PROMPT, userContent);
       if (Array.isArray(filtered)) {
         console.log(`   ✅ Success: ${batch.length} -> ${filtered.length} words`);
       } else {
@@ -167,11 +229,11 @@ async function main() {
     
     cleanWords.push(...filtered);
     
-    // Polite cooldown to prevent rate limit triggers
+    // Cooldown
     await sleep(2000);
   }
 
-  // Safety guard: Never write if the resulting array is completely empty (something went wrong)
+  // Safety guard: Never write if the resulting array is completely empty
   if (cleanWords.length === 0) {
     console.error('\n❌ Error: The filtered list is empty. Aborting write to prevent data corruption.');
     process.exit(1);
