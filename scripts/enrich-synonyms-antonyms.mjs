@@ -767,15 +767,19 @@ function askQuestion(query) {
 async function main() {
   // Parse CLI provider selection
   let selectedProviders = [];
+  let concurrencyPerProvider = 5; // Default for BOTH (5 workers per provider = 10 workers total)
   const cliProvider = (process.argv.find(a => a.startsWith('--provider=')) || '').split('=')[1];
 
   if (cliProvider) {
     if (cliProvider === 'deepseek') {
       selectedProviders = [PROVIDERS[0]];
-    } else if (cliProvider === '9router') {
+      concurrencyPerProvider = 10; // 10 workers for DeepSeek
+    } else if (cliProvider === '9router' || cliProvider === 'claude') {
       selectedProviders = [PROVIDERS[1]];
+      concurrencyPerProvider = 10; // 10 workers for Claude
     } else if (cliProvider === 'both') {
       selectedProviders = PROVIDERS;
+      concurrencyPerProvider = 5;  // 5 slots each = 10 workers total
     } else {
       console.error('❌ Invalid --provider. Use: deepseek | 9router | both');
       process.exit(1);
@@ -783,31 +787,34 @@ async function main() {
   } else {
     // Interactive selection prompt
     console.log('\n🤖 Select AI Provider to use:');
-    console.log('   [1] DeepSeek (NINEROUTER) only');
-    console.log('   [2] 9Router (ngocthang.io.vn) only');
-    console.log('   [3] Both providers running in parallel (Default)');
+    console.log('   [1] DeepSeek (NINEROUTER) only (10 parallel slots)');
+    console.log('   [2] Claude only (10 parallel slots)');
+    console.log('   [3] Both providers running in parallel (5 slots each, 10 total) (Default)');
     
     // Check if process.stdin is a TTY (interactive) or if we should skip in non-interactive environment
     if (process.stdin.isTTY) {
       const choice = await askQuestion('👉 Enter choice (1-3): ');
       if (choice === '1') {
         selectedProviders = [PROVIDERS[0]];
+        concurrencyPerProvider = 10;
       } else if (choice === '2') {
         selectedProviders = [PROVIDERS[1]];
+        concurrencyPerProvider = 10;
       } else {
         selectedProviders = PROVIDERS;
+        concurrencyPerProvider = 5;
       }
     } else {
       console.log('   (Non-interactive environment detected, defaulting to BOTH)');
       selectedProviders = PROVIDERS;
+      concurrencyPerProvider = 5;
     }
   }
 
-  // Build active workers list (each selected provider gets 2 slots running in parallel)
-  const CONCURRENCY_PER_PROVIDER = 2;
+  // Build active workers list (each selected provider gets dynamic parallel slots)
   const activeWorkers = [];
   selectedProviders.forEach(provider => {
-    for (let i = 0; i < CONCURRENCY_PER_PROVIDER; i++) {
+    for (let i = 0; i < concurrencyPerProvider; i++) {
       activeWorkers.push({
         provider,
         name: `${provider.name} (Slot ${i + 1})`
