@@ -51,9 +51,9 @@ const API_KEY       = process.env.NINEROUTER_API_KEY;
 const BASE_URL      = process.env.NINEROUTER_BASE_URL;
 const MODEL         = process.env.NINEROUTER_MODEL || 'deepseek-v4-flash';
 
-const BATCH_SIZE    = 40;   // words per AI call (safe for 8k output token limit)
-const WORKERS       = 2;    // parallel workers
-const RETRY_MAX     = 3;    // per-batch retries on parse failure
+const BATCH_SIZE    = 80;   // words per AI call — spec Section 18 recommends 80
+const WORKERS       = 2;    // parallel workers (both call AI concurrently via Promise.all)
+const RETRY_MAX     = 3;    // per-batch retries on parse/network failure
 const REPORT_FILE   = 'enrichment_report_synonyms.jsonl';
 const ENRICHED_BY   = 'ai:9router:deepseek-v4-flash';
 
@@ -583,32 +583,49 @@ ${inputStr}`;
 
 async function runWithWorkers(db, allDocs, processFn) {
   const totalBatches = Math.ceil(allDocs.length / BATCH_SIZE);
-  let batchIndex = 0;
   let totalSuccess = 0;
-  let totalFailed = 0;
+  let totalFailed  = 0;
+  let completedBatches = 0;
 
-  // Build queue of batches
+  // Build queue of batches upfront
+  let batchIndex = 0;
   const queue = [];
   for (let i = 0; i < allDocs.length; i += BATCH_SIZE) {
     queue.push({ batch: allDocs.slice(i, i + BATCH_SIZE), idx: ++batchIndex });
   }
 
+  console.log(`\n⚡ Starting ${WORKERS} parallel workers — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
+  console.log('   Both workers call the LLM API concurrently and independently.\n');
+
   async function worker(workerId) {
     while (queue.length > 0) {
       const job = queue.shift();
       if (!job) break;
-      console.log(`\n🔧 Worker ${workerId} — Batch ${job.idx}/${totalBatches}`);
+
+      const pct = (((completedBatches) / totalBatches) * 100).toFixed(1);
+      console.log(`\n🔧 [W${workerId}] Batch ${job.idx}/${totalBatches} (${pct}% done so far) — ${job.batch.length} words`);
+
+      const t0 = Date.now();
       const result = await processFn(db, job.batch, job.idx);
-      totalSuccess += result.success;
-      totalFailed += result.failed;
-      // Small delay between batches to be polite to the API
-      await sleep(1500);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+      // JS is single-threaded so these increments are safe
+      totalSuccess     += result.success;
+      totalFailed      += result.failed;
+      completedBatches += 1;
+
+      console.log(`   [W${workerId}] ✅ done in ${elapsed}s — success=${result.success} failed=${result.failed} | running total: ${totalSuccess} updated`);
+
+      // Brief cooldown between batches per worker to be kind to the API
+      await sleep(500);
     }
+    console.log(`\n   [W${workerId}] 🏁 Worker finished.`);
   }
 
-  // Start N workers in parallel
-  const workers = Array.from({ length: WORKERS }, (_, i) => worker(i + 1));
-  await Promise.all(workers);
+  // Launch both workers simultaneously — they pull from the shared queue concurrently
+  await Promise.all(
+    Array.from({ length: WORKERS }, (_, i) => worker(i + 1))
+  );
 
   return { totalSuccess, totalFailed };
 }
