@@ -61,11 +61,11 @@ const PROVIDERS = [
     enrichedBy:'ai:deepseek:deepseek-v4-flash',
   },
   {
-    name:      '9Router (ngocthang.io.vn)',
+    name:      'Claude',
     apiKey:    process.env.NINEROUTER_9R_API_KEY,
     baseUrl:   process.env.NINEROUTER_9R_BASE_URL,
-    model:     process.env.NINEROUTER_9R_MODEL || 'my-combo',
-    enrichedBy:'ai:9router:my-combo',
+    model:     process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet',
+    enrichedBy:`ai:claude:${process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet'}`,
   },
 ];
 
