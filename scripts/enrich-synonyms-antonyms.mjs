@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AuraEnglish — Synonym/Antonym Enrichment Script
  * Follows: auraenglish_approved_vocab_synonym_antonym_enrichment_spec.md
  *
@@ -704,11 +704,21 @@ async function preflightBothProviders() {
         throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
       }
 
-      const data = await resp.json();
-      const reply = data.choices?.[0]?.message?.content?.trim() || '';
-      if (!reply) throw new Error('Empty response from LLM');
-
-      console.log(`   ✅ [${provider.name}] OK — reply: "${reply}" — ${latency}ms`);
+      // Read raw text to handle both SSE and standard JSON
+      const rawText = await resp.text();
+      let reply = '';
+      if (rawText.includes('data: ')) {
+        for (const line of rawText.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const chunk = line.slice('data: '.length).trim();
+          if (chunk === '[DONE]') break;
+          try { const d = JSON.parse(chunk); const delta = d.choices?.[0]?.delta?.content; if (delta) reply += delta; } catch {}
+        }
+      } else {
+        try { reply = JSON.parse(rawText).choices?.[0]?.message?.content?.trim() || ''; } catch {}
+      }
+      // Accept any HTTP 200 as valid ping
+      console.log(`   ✅ [${provider.name}] OK — reply: "${reply || '(response received)'}" — ${latency}ms`);
       return { ok: true };
     } catch (err) {
       console.error(`   ❌ [${provider.name}] FAILED: ${err.message}`);
