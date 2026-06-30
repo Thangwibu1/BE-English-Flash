@@ -68,7 +68,7 @@ const PROVIDERS = [
   },
 ];
 
-const BATCH_SIZE  = 30;  // words per AI call — reduced from 80 to prevent output truncation/JSON parse errors
+const BATCH_SIZE  = 20;  // words per AI call — reduced to 20 to prevent output truncation/JSON parse errors
 const RETRY_MAX   = 3;   // per-batch retries on parse/network failure
 const REPORT_FILE = 'enrichment_report_synonyms.jsonl';
 
@@ -214,8 +214,8 @@ Rules:
 - Keep original id if present.
 - Add Vietnamese meaning (meaningVi). No [Draft]. No TODO.
 - Add simple English meaning (meaningEn).
-- Add a natural English example sentence (exampleEn). Do NOT start with "Example for".
-- Add Vietnamese translation of the example (exampleVi).
+- Add a natural English example sentence (exampleEn). Do NOT start with "Example for". Keep it concise (under 12 words).
+- Add Vietnamese translation of the example (exampleVi). Keep it concise (under 12 words).
 - Add partOfSpeech (noun / verb / adjective / adverb / preposition / conjunction / etc.).
 - Add forms array (base form + inflections, lowercase).
 - Add 1-3 relevant topics (English topic names like Work, Nature, Health, etc.).
