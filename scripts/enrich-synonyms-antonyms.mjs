@@ -46,16 +46,31 @@ loadEnv(ENV_PATH);
 // Suppress TLS warning
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const MONGODB_URI   = process.env.MONGODB_URI;
-const API_KEY       = process.env.NINEROUTER_API_KEY;
-const BASE_URL      = process.env.NINEROUTER_BASE_URL;
-const MODEL         = process.env.NINEROUTER_MODEL || 'deepseek-v4-flash';
+const MONGODB_URI = process.env.MONGODB_URI;
 
-const BATCH_SIZE    = 80;   // words per AI call — spec Section 18 recommends 80
-const WORKERS       = 2;    // parallel workers (both call AI concurrently via Promise.all)
-const RETRY_MAX     = 3;    // per-batch retries on parse/network failure
-const REPORT_FILE   = 'enrichment_report_synonyms.jsonl';
-const ENRICHED_BY   = 'ai:9router:deepseek-v4-flash';
+// ── Dual provider config ──
+// Worker 1 → DeepSeek (via NINEROUTER_*)
+// Worker 2 → 9Router  (via NINEROUTER_9R_*)
+const PROVIDERS = [
+  {
+    name:      'DeepSeek (NINEROUTER)',
+    apiKey:    process.env.NINEROUTER_API_KEY,
+    baseUrl:   process.env.NINEROUTER_BASE_URL,
+    model:     process.env.NINEROUTER_MODEL    || 'deepseek-v4-flash',
+    enrichedBy:'ai:deepseek:deepseek-v4-flash',
+  },
+  {
+    name:      '9Router (ngocthang.io.vn)',
+    apiKey:    process.env.NINEROUTER_9R_API_KEY,
+    baseUrl:   process.env.NINEROUTER_9R_BASE_URL,
+    model:     process.env.NINEROUTER_9R_MODEL || 'my-combo',
+    enrichedBy:'ai:9router:my-combo',
+  },
+];
+
+const BATCH_SIZE  = 80;  // words per AI call — spec Section 18 recommends 80
+const RETRY_MAX   = 3;   // per-batch retries on parse/network failure
+const REPORT_FILE = 'enrichment_report_synonyms.jsonl';
 
 // Parse CLI args
 const mode = (process.argv.find(a => a.startsWith('--mode=')) || '--mode=fix-and-relations').split('=')[1];
@@ -174,7 +189,7 @@ function mapToVocabularyPatch(item) {
     autoHighlight: item.autoHighlight ?? true,
 
     enrichedAt: new Date(),
-    enrichedBy: ENRICHED_BY,
+    enrichedBy: item._enrichedBy || 'ai:9router:deepseek-v4-flash',
 
     needsReview: false,
 
@@ -267,10 +282,10 @@ Rules:
 // 5. AI CALL
 // ──────────────────────────────────────────
 
-async function callAI(systemPrompt, userContent, attempt = 1) {
-  const url = `${BASE_URL}/chat/completions`;
+async function callAI(provider, systemPrompt, userContent, attempt = 1) {
+  const url = `${provider.baseUrl}/chat/completions`;
   const body = JSON.stringify({
-    model: MODEL,
+    model: provider.model,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: userContent  },
@@ -284,7 +299,7 @@ async function callAI(systemPrompt, userContent, attempt = 1) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${API_KEY}`,
+        Authorization: `Bearer ${provider.apiKey}`,
       },
       body,
       signal: AbortSignal.timeout(120_000), // 2 min timeout
@@ -303,9 +318,9 @@ async function callAI(systemPrompt, userContent, attempt = 1) {
     return JSON.parse(cleaned);
   } catch (err) {
     if (attempt < RETRY_MAX) {
-      console.warn(`  ⚠️  Retry ${attempt}/${RETRY_MAX}: ${err.message}`);
+      console.warn(`  ⚠️  Retry ${attempt}/${RETRY_MAX} [${provider.name}]: ${err.message}`);
       await sleep(3000 * attempt);
-      return callAI(systemPrompt, userContent, attempt + 1);
+      return callAI(provider, systemPrompt, userContent, attempt + 1);
     }
     throw err;
   }
@@ -361,9 +376,9 @@ function getQueryForMode(mode) {
 // 7. PROCESS BATCH
 // ──────────────────────────────────────────
 
-async function processFullEnrichBatch(db, batch, batchIndex, total) {
+async function processFullEnrichBatch(db, provider, batch, batchIndex) {
   const label = `Batch ${batchIndex} (${batch.length} items)`;
-  console.log(`\n📦 ${label} — full enrich`);
+  console.log(`\n📦 ${label} — full enrich [${provider.name}]`);
 
   const inputStr = JSON.stringify(
     batch.map(doc => ({
@@ -382,7 +397,7 @@ async function processFullEnrichBatch(db, batch, batchIndex, total) {
 
   let aiResult;
   try {
-    aiResult = await callAI(FULL_ENRICH_SYSTEM, userContent);
+    aiResult = await callAI(provider, FULL_ENRICH_SYSTEM, userContent);
   } catch (err) {
     console.error(`  ❌ AI call failed for ${label}: ${err.message}`);
     for (const doc of batch) {
@@ -395,6 +410,9 @@ async function processFullEnrichBatch(db, batch, batchIndex, total) {
   let success = 0, failed = 0;
 
   for (const item of items) {
+    // Tag which provider enriched this item
+    item._enrichedBy = provider.enrichedBy;
+
     const errors = validateItem(item);
     if (errors.length > 0) {
       console.warn(`  ⚠️  Validation failed [${item.text}]: ${errors.join(', ')}`);
@@ -434,8 +452,8 @@ async function processFullEnrichBatch(db, batch, batchIndex, total) {
   return { success, failed };
 }
 
-async function processRelationsOnlyBatch(db, batch, batchIndex) {
-  console.log(`\n📦 Batch ${batchIndex} (${batch.length} items) — relations only`);
+async function processRelationsOnlyBatch(db, provider, batch, batchIndex) {
+  console.log(`\n📦 Batch ${batchIndex} (${batch.length} items) — relations only [${provider.name}]`);
 
   const inputStr = JSON.stringify(
     batch.map(doc => ({
@@ -463,7 +481,7 @@ ${inputStr}`;
 
   let aiResult;
   try {
-    aiResult = await callAI(RELATIONS_ONLY_SYSTEM, userContent);
+    aiResult = await callAI(provider, RELATIONS_ONLY_SYSTEM, userContent);
   } catch (err) {
     console.error(`  ❌ AI call failed: ${err.message}`);
     for (const doc of batch) {
@@ -501,7 +519,7 @@ ${inputStr}`;
               ? { wordFamily: normalizeWordList(item.wordFamily) }
               : {}),
             enrichedAt: new Date(),
-            enrichedBy: ENRICHED_BY,
+            enrichedBy: provider.enrichedBy,
           },
         }
       );
@@ -517,8 +535,8 @@ ${inputStr}`;
   return { success, failed };
 }
 
-async function processWordFamilyBatch(db, batch, batchIndex) {
-  console.log(`\n📦 Batch ${batchIndex} (${batch.length} items) — word family`);
+async function processWordFamilyBatch(db, provider, batch, batchIndex) {
+  console.log(`\n📦 Batch ${batchIndex} (${batch.length} items) — word family [${provider.name}]`);
 
   const inputStr = JSON.stringify(
     batch.map(doc => ({
@@ -543,7 +561,7 @@ ${inputStr}`;
 
   let aiResult;
   try {
-    aiResult = await callAI(WORD_FAMILY_SYSTEM, userContent);
+    aiResult = await callAI(provider, WORD_FAMILY_SYSTEM, userContent);
   } catch (err) {
     console.error(`  ❌ AI call failed: ${err.message}`);
     return { success: 0, failed: batch.length };
@@ -594,38 +612,37 @@ async function runWithWorkers(db, allDocs, processFn) {
     queue.push({ batch: allDocs.slice(i, i + BATCH_SIZE), idx: ++batchIndex });
   }
 
-  console.log(`\n⚡ Starting ${WORKERS} parallel workers — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
-  console.log('   Both workers call the LLM API concurrently and independently.\n');
+  console.log(`\n⚡ Starting 2 parallel workers — ${totalBatches} batches total (${BATCH_SIZE} words/batch)`);
+  console.log(`   Worker 1 → ${PROVIDERS[0].name}`);
+  console.log(`   Worker 2 → ${PROVIDERS[1].name}\n`);
 
+  // Each worker is permanently bound to its own provider
   async function worker(workerId) {
+    const provider = PROVIDERS[workerId - 1]; // W1→PROVIDERS[0], W2→PROVIDERS[1]
     while (queue.length > 0) {
       const job = queue.shift();
       if (!job) break;
 
-      const pct = (((completedBatches) / totalBatches) * 100).toFixed(1);
-      console.log(`\n🔧 [W${workerId}] Batch ${job.idx}/${totalBatches} (${pct}% done so far) — ${job.batch.length} words`);
+      const pct = ((completedBatches / totalBatches) * 100).toFixed(1);
+      console.log(`\n🔧 [W${workerId}:${provider.name}] Batch ${job.idx}/${totalBatches} (${pct}% done) — ${job.batch.length} words`);
 
       const t0 = Date.now();
-      const result = await processFn(db, job.batch, job.idx);
+      const result = await processFn(db, provider, job.batch, job.idx);
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 
-      // JS is single-threaded so these increments are safe
       totalSuccess     += result.success;
       totalFailed      += result.failed;
       completedBatches += 1;
 
-      console.log(`   [W${workerId}] ✅ done in ${elapsed}s — success=${result.success} failed=${result.failed} | running total: ${totalSuccess} updated`);
+      console.log(`   [W${workerId}] ✅ done in ${elapsed}s — +${result.success} updated | running total: ${totalSuccess}`);
 
-      // Brief cooldown between batches per worker to be kind to the API
       await sleep(500);
     }
     console.log(`\n   [W${workerId}] 🏁 Worker finished.`);
   }
 
-  // Launch both workers simultaneously — they pull from the shared queue concurrently
-  await Promise.all(
-    Array.from({ length: WORKERS }, (_, i) => worker(i + 1))
-  );
+  // Launch both workers simultaneously — each uses its own AI provider
+  await Promise.all([worker(1), worker(2)]);
 
   return { totalSuccess, totalFailed };
 }
@@ -635,53 +652,62 @@ async function runWithWorkers(db, allDocs, processFn) {
 // ──────────────────────────────────────────
 
 /**
- * Send a minimal "hello" message to the LLM API.
- * Verifies the API key, base URL, and model are all reachable
- * before the script touches any database records.
- * Exits with code 1 if the ping fails.
+ * Ping both AI providers simultaneously.
+ * Both must respond before any DB work starts.
  */
-async function preflightLLMPing() {
-  console.log('\n🏓 Preflight: pinging LLM API...');
-  console.log(`   Endpoint : ${BASE_URL}/chat/completions`);
-  console.log(`   Model    : ${MODEL}`);
+async function preflightBothProviders() {
+  console.log('\n🏓 Preflight: pinging BOTH providers simultaneously...');
 
-  const t0 = Date.now();
-  try {
-    const resp = await fetch(`${BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: 'user', content: 'Reply with exactly one word: hello' },
-        ],
-        max_tokens: 10,
-        temperature: 0,
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
+  async function pingOne(provider) {
+    console.log(`   ► [${provider.name}] ${provider.baseUrl} (model: ${provider.model})`);
+    const t0 = Date.now();
+    try {
+      const resp = await fetch(`${provider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: provider.model,
+          messages: [{ role: 'user', content: 'Reply with exactly one word: hello' }],
+          max_tokens: 10,
+          temperature: 0,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
 
-    if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`HTTP ${resp.status} — ${body.slice(0, 300)}`);
+      const latency = Date.now() - t0;
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      }
+
+      const data = await resp.json();
+      const reply = data.choices?.[0]?.message?.content?.trim() || '';
+      if (!reply) throw new Error('Empty response from LLM');
+
+      console.log(`   ✅ [${provider.name}] OK — reply: "${reply}" — ${latency}ms`);
+      return { ok: true };
+    } catch (err) {
+      console.error(`   ❌ [${provider.name}] FAILED: ${err.message}`);
+      return { ok: false, error: err.message };
     }
+  }
 
-    const data = await resp.json();
-    const reply = data.choices?.[0]?.message?.content?.trim() || '';
-    const latency = Date.now() - t0;
+  // Ping both at the same time
+  const [r1, r2] = await Promise.all([
+    pingOne(PROVIDERS[0]),
+    pingOne(PROVIDERS[1]),
+  ]);
 
-    if (!reply) throw new Error('LLM returned empty response');
-
-    console.log(`✅ LLM ping OK — reply: "${reply}" — latency: ${latency}ms`);
-    console.log(`   Provider : ${ENRICHED_BY}`);
-  } catch (err) {
-    console.error(`\n❌ LLM preflight ping FAILED: ${err.message}`);
-    console.error('   Script will NOT proceed. Fix the API connection and retry.');
+  if (!r1.ok || !r2.ok) {
+    console.error('\n❌ One or more providers failed preflight ping.');
+    console.error('   Fix the failing provider before running the enrichment job.');
     process.exit(1);
   }
+
+  console.log('\n✅ Both providers are reachable and responding!');
 }
 
 // ──────────────────────────────────────────
@@ -689,22 +715,17 @@ async function preflightLLMPing() {
 // ──────────────────────────────────────────
 
 async function main() {
-  // ── Guard: check required env vars ──
-  if (!MONGODB_URI) {
-    console.error('❌ MONGODB_URI not set in .env');
-    process.exit(1);
-  }
-  if (!API_KEY) {
-    console.error('❌ NINEROUTER_API_KEY not set in .env');
-    process.exit(1);
-  }
-  if (!BASE_URL) {
-    console.error('❌ NINEROUTER_BASE_URL not set in .env');
-    process.exit(1);
+  // ── Guard: check both providers have credentials ──
+  for (const p of PROVIDERS) {
+    if (!p.apiKey || !p.baseUrl) {
+      console.error(`\n❌ Missing credentials for provider: ${p.name}`);
+      console.error('   Check NINEROUTER_* and NINEROUTER_9R_* in .env');
+      process.exit(1);
+    }
   }
 
-  // ── Phase 0: Preflight LLM ping (must succeed before touching DB) ──
-  await preflightLLMPing();
+  // ── Phase 0: Preflight — ping BOTH providers before touching DB ──
+  await preflightBothProviders();
 
   console.log('\n🔗 Connecting to MongoDB...');
   const client = new MongoClient(MONGODB_URI);
