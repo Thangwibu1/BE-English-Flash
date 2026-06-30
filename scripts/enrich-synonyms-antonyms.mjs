@@ -61,11 +61,11 @@ const PROVIDERS = [
     enrichedBy:'ai:deepseek:deepseek-v4-flash',
   },
   {
-    name:      'Claude',
+    name:      'GLM (aishop24h)',
     apiKey:    process.env.NINEROUTER_9R_API_KEY,
     baseUrl:   process.env.NINEROUTER_9R_BASE_URL,
-    model:     process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet',
-    enrichedBy:`ai:claude:${process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet'}`,
+    model:     process.env.NINEROUTER_9R_MODEL || 'z-ai/glm-5.2',
+    enrichedBy:`ai:glm:${process.env.NINEROUTER_9R_MODEL || 'z-ai/glm-5.2'}`,
   },
 ];
 
@@ -789,19 +789,19 @@ async function main() {
   if (cliProvider) {
     if (cliProvider === 'deepseek') {
       selectedProviders = [PROVIDERS[0]];
-    } else if (cliProvider === '9router' || cliProvider === 'claude') {
+    } else if (cliProvider === '9router' || cliProvider === 'claude' || cliProvider === 'glm') {
       selectedProviders = [PROVIDERS[1]];
     } else if (cliProvider === 'both') {
       selectedProviders = PROVIDERS;
     } else {
-      console.error('❌ Invalid --provider. Use: deepseek | 9router | both');
+      console.error('❌ Invalid --provider. Use: deepseek | glm | both');
       process.exit(1);
     }
   } else {
     // Interactive selection prompt
     console.log('\n🤖 Select AI Provider to use:');
     console.log('   [1] DeepSeek (NINEROUTER) only (10 parallel slots)');
-    console.log('   [2] Claude only (10 parallel slots)');
+    console.log('   [2] GLM (aishop24h) only (10 parallel slots)');
     console.log('   [3] Both providers running in parallel (10 slots each, 20 total) (Default)');
     
     // Check if process.stdin is a TTY (interactive) or if we should skip in non-interactive environment

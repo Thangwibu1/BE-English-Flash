@@ -45,10 +45,10 @@ const PROVIDERS = [
     model:     process.env.NINEROUTER_MODEL    || 'deepseek-v4-flash',
   },
   {
-    name:      'Claude',
+    name:      'GLM (aishop24h)',
     apiKey:    process.env.NINEROUTER_9R_API_KEY,
     baseUrl:   process.env.NINEROUTER_9R_BASE_URL,
-    model:     process.env.NINEROUTER_9R_MODEL || 'claude-3-5-sonnet',
+    model:     process.env.NINEROUTER_9R_MODEL || 'z-ai/glm-5.2',
   },
 ];
 
@@ -233,16 +233,16 @@ async function main() {
   if (cliProvider) {
     if (cliProvider === 'deepseek') {
       provider = PROVIDERS[0];
-    } else if (cliProvider === '9router' || cliProvider === 'claude') {
+    } else if (cliProvider === '9router' || cliProvider === 'claude' || cliProvider === 'glm') {
       provider = PROVIDERS[1];
     } else {
-      console.error('❌ Invalid --provider. Use: deepseek | claude');
+      console.error('❌ Invalid --provider. Use: deepseek | glm');
       process.exit(1);
     }
   } else {
     console.log('\n🤖 Select AI Provider to use for Filtering:');
     console.log('   [1] DeepSeek (NINEROUTER) (10 parallel slots)');
-    console.log('   [2] Claude (10 parallel slots) (Default)');
+    console.log('   [2] GLM (aishop24h) (10 parallel slots) (Default)');
     
     if (process.stdin.isTTY) {
       const choice = await askQuestion('👉 Enter choice (1-2): ');
@@ -252,7 +252,7 @@ async function main() {
         provider = PROVIDERS[1];
       }
     } else {
-      console.log('   (Non-interactive environment detected, defaulting to Claude)');
+      console.log('   (Non-interactive environment detected, defaulting to GLM)');
       provider = PROVIDERS[1];
     }
   }

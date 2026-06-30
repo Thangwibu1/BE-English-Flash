@@ -35,10 +35,10 @@ const PROVIDERS = [
     model:   process.env.NINEROUTER_MODEL || 'deepseek-v4-flash',
   },
   {
-    name: '9Router (ngocthang.io.vn)',
+    name: 'GLM (aishop24h)',
     apiKey:  process.env.NINEROUTER_9R_API_KEY,
     baseUrl: process.env.NINEROUTER_9R_BASE_URL,
-    model:   process.env.NINEROUTER_9R_MODEL || 'my-combo',
+    model:   process.env.NINEROUTER_9R_MODEL || 'z-ai/glm-5.2',
   },
 ];
 
