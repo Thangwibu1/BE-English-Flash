@@ -104,7 +104,17 @@ async function callAI(provider, systemPrompt, userContent, attempt = 1) {
       }
     } else {
       // Standard JSON
-      content = JSON.parse(rawText).choices?.[0]?.message?.content || '';
+      const data = JSON.parse(rawText);
+      content = data.choices?.[0]?.message?.content || '';
+      if (!content && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+        const argsStr = data.choices[0].message.tool_calls[0].function.arguments;
+        try {
+          const parsedArgs = JSON.parse(argsStr);
+          content = parsedArgs.response || parsedArgs.content || argsStr;
+        } catch {
+          content = argsStr;
+        }
+      }
     }
 
     const cleaned = content.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();

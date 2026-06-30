@@ -244,7 +244,17 @@ async function callAI(provider, systemPrompt, userContent, attempt = 1) {
       }
     } else {
       // Standard JSON
-      content = JSON.parse(rawText).choices?.[0]?.message?.content || '';
+      const data = JSON.parse(rawText);
+      content = data.choices?.[0]?.message?.content || '';
+      if (!content && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+        const argsStr = data.choices[0].message.tool_calls[0].function.arguments;
+        try {
+          const parsedArgs = JSON.parse(argsStr);
+          content = parsedArgs.response || parsedArgs.content || argsStr;
+        } catch {
+          content = argsStr;
+        }
+      }
     }
 
     const cleaned = content.replace(/^```(?:json)?\n?/m, '').replace(/```$/m, '').trim();
@@ -433,7 +443,14 @@ async function preflightSelectedProviders(selectedProviders) {
           } catch {}
         }
       } else {
-        try { reply = JSON.parse(rawText).choices?.[0]?.message?.content?.trim() || ''; } catch {}
+        try {
+          const data = JSON.parse(rawText);
+          reply = data.choices?.[0]?.message?.content?.trim() || '';
+          if (!reply && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+            const args = JSON.parse(data.choices[0].message.tool_calls[0].function.arguments);
+            reply = (args.response || args.content || '').trim();
+          }
+        } catch {}
       }
       console.log(`   ✅ [${provider.name}] OK — reply: "${reply || '(response received)'}" — ${latency}ms`);
       return { ok: true };

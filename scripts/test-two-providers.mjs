@@ -103,6 +103,15 @@ async function callProvider(provider, systemPrompt, userContent) {
     // Standard JSON format
     const data = JSON.parse(rawText);
     content = data.choices?.[0]?.message?.content || '';
+    if (!content && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+      const argsStr = data.choices[0].message.tool_calls[0].function.arguments;
+      try {
+        const parsedArgs = JSON.parse(argsStr);
+        content = parsedArgs.response || parsedArgs.content || argsStr;
+      } catch {
+        content = argsStr;
+      }
+    }
   }
 
   const cleaned = stripFences(content);
@@ -160,10 +169,16 @@ async function pingProvider(provider) {
     } else {
       const data = JSON.parse(rawText);
       reply = data.choices?.[0]?.message?.content?.trim() || '';
+      if (!reply && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+        try {
+          const args = JSON.parse(data.choices[0].message.tool_calls[0].function.arguments);
+          reply = (args.response || args.content || '').trim();
+        } catch {}
+      }
     }
 
     // Accept any response as OK (model may choose any reply word)
-    console.log(`   ✅ PING OK — reply: "${reply || '(response received)'}" — latency: ${latency}ms`);
+    console.log(`   \u2705 PING OK \u2014 reply: "${reply || '(response received)'}" \u2014 latency: ${latency}ms`);
     return true;
   } catch (err) {
     console.error(`   ❌ PING FAILED: ${err.message}`);

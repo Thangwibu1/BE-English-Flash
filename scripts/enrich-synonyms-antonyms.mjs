@@ -332,6 +332,15 @@ async function callAI(provider, systemPrompt, userContent, attempt = 1) {
       // Standard JSON format
       const data = JSON.parse(rawText);
       content = data.choices?.[0]?.message?.content || '';
+      if (!content && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+        const argsStr = data.choices[0].message.tool_calls[0].function.arguments;
+        try {
+          const parsedArgs = JSON.parse(argsStr);
+          content = parsedArgs.response || parsedArgs.content || argsStr;
+        } catch {
+          content = argsStr;
+        }
+      }
     }
 
     // Strip markdown fences if AI adds them anyway
@@ -724,7 +733,14 @@ async function preflightSelectedProviders(selectedProviders) {
           try { const d = JSON.parse(chunk); const delta = d.choices?.[0]?.delta?.content; if (delta) reply += delta; } catch {}
         }
       } else {
-        try { reply = JSON.parse(rawText).choices?.[0]?.message?.content?.trim() || ''; } catch {}
+        try {
+          const data = JSON.parse(rawText);
+          reply = data.choices?.[0]?.message?.content?.trim() || '';
+          if (!reply && data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+            const args = JSON.parse(data.choices[0].message.tool_calls[0].function.arguments);
+            reply = (args.response || args.content || '').trim();
+          }
+        } catch {}
       }
       // Accept any HTTP 200 as valid ping
       console.log(`   ✅ [${provider.name}] OK — reply: "${reply || '(response received)'}" — ${latency}ms`);
