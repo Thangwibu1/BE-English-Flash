@@ -55,6 +55,7 @@ const BATCH_SIZE    = 40;   // words per AI call (safe for 8k output token limit
 const WORKERS       = 2;    // parallel workers
 const RETRY_MAX     = 3;    // per-batch retries on parse failure
 const REPORT_FILE   = 'enrichment_report_synonyms.jsonl';
+const ENRICHED_BY   = 'ai:9router:deepseek-v4-flash';
 
 // Parse CLI args
 const mode = (process.argv.find(a => a.startsWith('--mode=')) || '--mode=fix-and-relations').split('=')[1];
@@ -173,7 +174,7 @@ function mapToVocabularyPatch(item) {
     autoHighlight: item.autoHighlight ?? true,
 
     enrichedAt: new Date(),
-    enrichedBy: 'ai:9router:deepseek-v4-flash',
+    enrichedBy: ENRICHED_BY,
 
     needsReview: false,
 
@@ -500,7 +501,7 @@ ${inputStr}`;
               ? { wordFamily: normalizeWordList(item.wordFamily) }
               : {}),
             enrichedAt: new Date(),
-            enrichedBy: 'ai:9router:deepseek-v4-flash',
+            enrichedBy: ENRICHED_BY,
           },
         }
       );
@@ -613,10 +614,65 @@ async function runWithWorkers(db, allDocs, processFn) {
 }
 
 // ──────────────────────────────────────────
-// 9. MAIN
+// 9. PREFLIGHT — LLM PING
+// ──────────────────────────────────────────
+
+/**
+ * Send a minimal "hello" message to the LLM API.
+ * Verifies the API key, base URL, and model are all reachable
+ * before the script touches any database records.
+ * Exits with code 1 if the ping fails.
+ */
+async function preflightLLMPing() {
+  console.log('\n🏓 Preflight: pinging LLM API...');
+  console.log(`   Endpoint : ${BASE_URL}/chat/completions`);
+  console.log(`   Model    : ${MODEL}`);
+
+  const t0 = Date.now();
+  try {
+    const resp = await fetch(`${BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'user', content: 'Reply with exactly one word: hello' },
+        ],
+        max_tokens: 10,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(`HTTP ${resp.status} — ${body.slice(0, 300)}`);
+    }
+
+    const data = await resp.json();
+    const reply = data.choices?.[0]?.message?.content?.trim() || '';
+    const latency = Date.now() - t0;
+
+    if (!reply) throw new Error('LLM returned empty response');
+
+    console.log(`✅ LLM ping OK — reply: "${reply}" — latency: ${latency}ms`);
+    console.log(`   Provider : ${ENRICHED_BY}`);
+  } catch (err) {
+    console.error(`\n❌ LLM preflight ping FAILED: ${err.message}`);
+    console.error('   Script will NOT proceed. Fix the API connection and retry.');
+    process.exit(1);
+  }
+}
+
+// ──────────────────────────────────────────
+// 10. MAIN
 // ──────────────────────────────────────────
 
 async function main() {
+  // ── Guard: check required env vars ──
   if (!MONGODB_URI) {
     console.error('❌ MONGODB_URI not set in .env');
     process.exit(1);
@@ -625,6 +681,13 @@ async function main() {
     console.error('❌ NINEROUTER_API_KEY not set in .env');
     process.exit(1);
   }
+  if (!BASE_URL) {
+    console.error('❌ NINEROUTER_BASE_URL not set in .env');
+    process.exit(1);
+  }
+
+  // ── Phase 0: Preflight LLM ping (must succeed before touching DB) ──
+  await preflightLLMPing();
 
   console.log('\n🔗 Connecting to MongoDB...');
   const client = new MongoClient(MONGODB_URI);
