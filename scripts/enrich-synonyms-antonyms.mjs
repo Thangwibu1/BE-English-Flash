@@ -82,7 +82,7 @@ if (!['fix-and-relations', 'relations-only', 'word-family'].includes(mode)) {
 }
 
 console.log(`\n🚀 Mode: ${mode}${DRY_RUN ? ' [DRY RUN]' : ''}`);
-console.log(`   Batch size: ${BATCH_SIZE}, Workers: ${WORKERS}`);
+console.log(`   Batch size: ${BATCH_SIZE}, Workers: 2 (DeepSeek + 9Router)`);
 
 // ──────────────────────────────────────────
 // 1. HELPERS
