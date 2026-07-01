@@ -55,11 +55,11 @@ export class FuzzyVocabularySearchService {
 
     this.fuse = new Fuse(this.docs, {
       keys: [
-        { name: 'text', weight: 0.5 },
-        { name: 'normalizedText', weight: 0.3 },
+        { name: 'text', weight: 0.4 },
+        { name: 'meaningVi', weight: 0.3 },
+        { name: 'normalizedText', weight: 0.15 },
         { name: 'forms', weight: 0.1 },
-        { name: 'meaningVi', weight: 0.06 },
-        { name: 'meaningEn', weight: 0.04 },
+        { name: 'meaningEn', weight: 0.05 },
       ],
       threshold: 0.35,
       distance: 100,

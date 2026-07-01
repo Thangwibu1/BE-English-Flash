@@ -166,12 +166,16 @@ export class MongoVocabularyRepository implements VocabularyRepository {
   }
 
   async searchExact(params: SearchExactParams): Promise<Vocabulary[]> {
+    const escapedQuery = params.normalizedQuery.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+    const viRegex = new RegExp(`(^|[,;\\s])\\s*${escapedQuery}\\s*($|[,;\\s])`, 'i');
+
     const filter: any = {
       status: 'approved',
       deletedAt: null,
       $or: [
         { normalizedText: params.normalizedQuery },
         { 'forms.normalizedFormText': params.normalizedQuery },
+        { 'meanings.meaningVi': viRegex },
       ],
     };
 
@@ -184,10 +188,16 @@ export class MongoVocabularyRepository implements VocabularyRepository {
   }
 
   async searchPrefix(params: SearchPrefixParams): Promise<Vocabulary[]> {
+    const escapedQuery = params.token.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+    const viPrefixRegex = new RegExp(`(^|[,;\\s])\\s*${escapedQuery}`, 'i');
+
     const filter: any = {
       status: 'approved',
       deletedAt: null,
-      searchTokens: params.token,
+      $or: [
+        { searchTokens: params.token },
+        { 'meanings.meaningVi': viPrefixRegex },
+      ],
     };
 
     if (params.type) filter.type = params.type;
