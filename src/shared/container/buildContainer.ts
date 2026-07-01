@@ -254,6 +254,7 @@ export function buildContainer() {
     deckRepository,
     cardRepository,
     vocabularyRepository,
+    userProgressRepository,
     trackLearningActivityUseCase
   );
   const reviewFlashcardUseCase = new ReviewFlashcardUseCase(

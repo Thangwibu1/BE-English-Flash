@@ -29,17 +29,23 @@ export class MongoUserProgressRepository implements UserProgressRepository {
   async saveWordProgress(
     userId: string,
     vocabularyId: string,
-    progress: Partial<UserWordProgress>
+    progress: any
   ): Promise<UserWordProgress> {
-    const updateData: any = { ...progress };
-    delete updateData.id;
-    delete updateData._id;
-    delete updateData.userId;
-    delete updateData.vocabularyId;
+    let update: any;
+    if (progress && (progress.$set || progress.$setOnInsert)) {
+      update = progress;
+    } else {
+      const updateData = { ...progress };
+      delete updateData.id;
+      delete updateData._id;
+      delete updateData.userId;
+      delete updateData.vocabularyId;
+      update = { $set: updateData };
+    }
 
     const doc = await UserWordProgressModel.findOneAndUpdate(
       { userId, vocabularyId },
-      { $set: updateData },
+      update,
       { new: true, upsert: true }
     );
     return mapWordProgressDocToEntity(doc);

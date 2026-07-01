@@ -22,17 +22,28 @@ export class SaveVocabularyUseCase {
       throw new AppError('NOT_FOUND', 'Vocabulary item not found', 404);
     }
 
-    const existing = await this.userProgressRepository.findWordProgress(input.userId, input.vocabularyId);
-
-    const updateData: Partial<UserWordProgress> = {
-      status: 'saved',
+    const now = new Date();
+    const update = {
+      $set: {
+        status: 'saved',
+        dueAt: now,
+        deletedAt: null,
+      },
+      $setOnInsert: {
+        ease: 2.5,
+        intervalDays: 0,
+        reviewCount: 0,
+        correctCount: 0,
+        wrongCount: 0,
+        firstSavedAt: now,
+      },
     };
 
-    if (!existing || !existing.firstSavedAt) {
-      updateData.firstSavedAt = new Date();
-    }
-
-    const progress = await this.userProgressRepository.saveWordProgress(input.userId, input.vocabularyId, updateData);
+    const progress = await this.userProgressRepository.saveWordProgress(
+      input.userId,
+      input.vocabularyId,
+      update
+    );
     
     // Track learning activity
     await this.trackLearningActivityUseCase.execute({

@@ -22,12 +22,29 @@ export class MarkVocabularyDifficultUseCase {
       throw new AppError('NOT_FOUND', 'Vocabulary item not found', 404);
     }
 
-    const updateData: Partial<UserWordProgress> = {
-      status: 'difficult',
-      markedDifficultAt: new Date(),
+    const now = new Date();
+    const update = {
+      $set: {
+        status: 'difficult',
+        markedDifficultAt: now,
+        dueAt: now,
+        deletedAt: null,
+      },
+      $setOnInsert: {
+        ease: 2.5,
+        intervalDays: 0,
+        reviewCount: 0,
+        correctCount: 0,
+        wrongCount: 0,
+        firstSavedAt: now,
+      },
     };
 
-    const progress = await this.userProgressRepository.saveWordProgress(input.userId, input.vocabularyId, updateData);
+    const progress = await this.userProgressRepository.saveWordProgress(
+      input.userId,
+      input.vocabularyId,
+      update
+    );
 
     // Track learning activity
     await this.trackLearningActivityUseCase.execute({

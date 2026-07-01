@@ -14,6 +14,15 @@ export class MongoFlashcardDeckRepository implements FlashcardDeckRepository {
     return docs.map(mapDeckDocToEntity);
   }
 
+  async findByNameAndOwner(name: string, ownerId: string): Promise<FlashcardDeck | null> {
+    const doc = await FlashcardDeckModel.findOne({
+      ownerId,
+      name: { $regex: new RegExp(`^${name}$`, 'i') },
+      deletedAt: null,
+    });
+    return doc ? mapDeckDocToEntity(doc) : null;
+  }
+
   async findPublicDecks(): Promise<FlashcardDeck[]> {
     const docs = await FlashcardDeckModel.find({ visibility: 'public', status: 'active', deletedAt: null }).sort({ createdAt: -1 });
     return docs.map(mapDeckDocToEntity);
