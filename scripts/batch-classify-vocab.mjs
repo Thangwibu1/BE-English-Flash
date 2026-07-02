@@ -9,12 +9,12 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const mongoUri = process.env.MONGODB_URI;
-const apiKey = process.env.NINEROUTER_API_KEY;
-const baseUrl = process.env.NINEROUTER_BASE_URL || 'https://api.deepseek.com/v1';
-const modelName = process.env.NINEROUTER_MODEL || 'deepseek-v4-flash';
+const apiKey = process.env.NINEROUTER_9R_API_KEY;
+const baseUrl = process.env.NINEROUTER_9R_BASE_URL || 'https://aishop24h.com/v1';
+const modelName = process.env.NINEROUTER_9R_MODEL || 'z-ai/glm-5.2';
 
 if (!mongoUri || !apiKey) {
-  console.error('❌ MONGODB_URI or NINEROUTER_API_KEY is missing from .env!');
+  console.error('❌ MONGODB_URI or NINEROUTER_9R_API_KEY is missing from .env!');
   process.exit(1);
 }
 
@@ -125,7 +125,7 @@ async function run() {
   console.log(`Found ${unclassifiedWords.length} vocabularies needing classification.`);
 
   if (unclassifiedWords.length > 0) {
-    // 4. Batch words and classify using DeepSeek model (concurrency = 30, batchSize = 40)
+    // 4. Batch words and classify using GLM model (concurrency = 30, batchSize = 40)
     const batchSize = 40;
     const batches = [];
     for (let i = 0; i < unclassifiedWords.length; i += batchSize) {
@@ -133,7 +133,7 @@ async function run() {
     }
 
     console.log(`Split into ${batches.length} batches of up to ${batchSize} words.`);
-    console.log(`Starting classification with concurrency of 30 using DeepSeek model...`);
+    console.log(`Starting classification with concurrency of 30 using GLM model...`);
 
     let completedBatches = 0;
     const concurrency = 30;
@@ -184,8 +184,7 @@ Return JSON shape:
                   role: 'user',
                   content: prompt
                 }
-              ],
-              temperature: 0.2
+              ]
             })
           });
 
@@ -253,6 +252,7 @@ Return JSON shape:
 
       completedBatches++;
       console.log(`[Progress] ${completedBatches}/${batches.length} batches completed (${Math.round((completedBatches / batches.length) * 100)}%)`);
+      await delay(500);
     }
 
     // Promise Pool for parallel execution
@@ -272,18 +272,22 @@ Return JSON shape:
 
   // 5. Build Flashcard Decks by Topic & Level
   console.log('\n--- Building Flashcard Decks by Topic and Level ---');
-  
-  // Aggregate vocabulary count by topicId and level
+
+  // Aggregate vocabulary details by topicId and level
   const vocabItems = await vocabCollection.find({
     status: 'approved',
     deletedAt: null,
     level: { $exists: true, $ne: null },
     topicIds: { $exists: true, $not: { $size: 0 } }
-  }).project({ level: 1, topicIds: 1 }).toArray();
+  }).project({ level: 1, topicIds: 1, text: 1, meanings: 1 }).toArray();
 
   console.log(`Grouping ${vocabItems.length} items by topic and level...`);
 
-  // Map of "topicId_level" -> array of vocabularyId
+  // Pre-load all topics into a Map by ID string for fast lookup (no per-deck DB query)
+  const topicsById = new Map();
+  rawTopics.forEach(t => topicsById.set(t._id.toString(), t));
+
+  // Map of "topicId_level" -> array of vocabulary item documents
   const groups = new Map();
   vocabItems.forEach(item => {
     item.topicIds.forEach(topicId => {
@@ -291,34 +295,32 @@ Return JSON shape:
       if (!groups.has(key)) {
         groups.set(key, []);
       }
-      groups.get(key).push(item._id);
+      groups.get(key).push(item);
     });
   });
 
   console.log(`Found ${groups.size} unique Topic-Level combinations.`);
+  console.log(`Building decks... (this will be fast with bulk insert)`);
 
   let decksCreated = 0;
   let cardsAdded = 0;
+  let processed = 0;
 
-  for (const [key, vocabIds] of groups.entries()) {
+  // Prepare all deck inserts in memory
+  const deckDocs = [];
+  const groupEntries = [...groups.entries()];
+
+  for (const [key, itemsList] of groupEntries) {
     const [topicIdStr, level] = key.split('_');
-    const topicObjectId = new mongoose.Types.ObjectId(topicIdStr);
-
-    const topic = await topicsCollection.findOne({ _id: topicObjectId });
+    const topic = topicsById.get(topicIdStr);
     if (!topic) continue;
 
     const deckName = `${topic.name} - ${level}`;
     const deckDescription = `System flashcard deck for ${topic.name} at CEFR level ${level}`;
 
-    // Find or create public deck
-    let deck = await decksCollection.findOne({
-      ownerId: systemOwnerId,
-      name: deckName,
-      deletedAt: null
-    });
-
-    if (!deck) {
-      const result = await decksCollection.insertOne({
+    deckDocs.push({
+      key,
+      deckDoc: {
         ownerId: systemOwnerId,
         name: deckName,
         description: deckDescription,
@@ -329,49 +331,79 @@ Return JSON shape:
         deletedAt: null,
         createdAt: new Date(),
         updatedAt: new Date()
-      });
-      deck = { _id: result.insertedId, cardCount: 0 };
-      decksCreated++;
-    }
+      },
+      itemsList
+    });
+  }
 
-    // Deduplicate vocabIds to prevent duplicate card creation in the same deck
-    const uniqueVocabIds = [...new Set(vocabIds.map(id => id.toString()))].map(idStr => new mongoose.Types.ObjectId(idStr));
+  // Bulk insert all decks at once
+  if (deckDocs.length > 0) {
+    const deckInsertResult = await decksCollection.insertMany(
+      deckDocs.map(d => d.deckDoc),
+      { ordered: false }
+    );
+    decksCreated = deckInsertResult.insertedCount;
+    console.log(`✅ Created ${decksCreated} decks. Now inserting cards...`);
 
-    // Add cards in batch
-    let orderIndex = deck.cardCount || 0;
-    const cardsToInsert = [];
+    // Build all cards in memory and bulk insert per deck
+    const allCards = [];
+    deckDocs.forEach((entry, i) => {
+      const deckId = deckInsertResult.insertedIds[i];
+      if (!deckId) return;
 
-    for (const vocabularyId of uniqueVocabIds) {
-      // Check if already in deck
-      const existingCard = await cardsCollection.findOne({
-        deckId: deck._id,
-        vocabularyId,
-        deletedAt: null
-      });
+      // Deduplicate vocabs for this deck
+      const uniqueMap = new Map();
+      entry.itemsList.forEach(item => uniqueMap.set(item._id.toString(), item));
 
-      if (!existingCard) {
-        cardsToInsert.push({
-          deckId: deck._id,
-          vocabularyId,
+      let orderIndex = 0;
+      for (const [vocabIdStr, vocab] of uniqueMap.entries()) {
+        allCards.push({
+          deckId,
+          vocabularyId: new mongoose.Types.ObjectId(vocabIdStr),
+          front: vocab.text || '',
+          back: vocab.meanings?.[0]?.meaningVi || '',
+          example: vocab.meanings?.[0]?.examples?.[0]?.exampleEn || '',
           orderIndex: orderIndex++,
           deletedAt: null,
           createdAt: new Date(),
           updatedAt: new Date()
         });
       }
+    });
+
+    console.log(`Prepared ${allCards.length} cards. Inserting in chunks...`);
+
+    // Insert cards in chunks of 1000 to avoid memory issues
+    const chunkSize = 1000;
+    for (let i = 0; i < allCards.length; i += chunkSize) {
+      const chunk = allCards.slice(i, i + chunkSize);
+      await cardsCollection.insertMany(chunk, { ordered: false });
+      cardsAdded += chunk.length;
+      const pct = Math.round((i + chunk.length) / allCards.length * 100);
+      console.log(`  [Cards] ${i + chunk.length}/${allCards.length} inserted (${pct}%)`);
     }
 
-    if (cardsToInsert.length > 0) {
-      await cardsCollection.insertMany(cardsToInsert);
-      await decksCollection.updateOne(
-        { _id: deck._id },
-        { $inc: { cardCount: cardsToInsert.length }, $set: { updatedAt: new Date() } }
-      );
-      cardsAdded += cardsToInsert.length;
+    // Update cardCount for each deck
+    console.log(`Updating cardCount for each deck...`);
+    const cardCountBulk = [];
+    deckDocs.forEach((entry, i) => {
+      const deckId = deckInsertResult.insertedIds[i];
+      if (!deckId) return;
+      const uniqueMap = new Map();
+      entry.itemsList.forEach(item => uniqueMap.set(item._id.toString(), item));
+      cardCountBulk.push({
+        updateOne: {
+          filter: { _id: deckId },
+          update: { $set: { cardCount: uniqueMap.size } }
+        }
+      });
+    });
+    if (cardCountBulk.length > 0) {
+      await decksCollection.bulkWrite(cardCountBulk);
     }
   }
 
-  console.log(`✅ Flashcard decks sync completed!`);
+  console.log(`\n✅ Flashcard decks sync completed!`);
   console.log(`- Decks created: ${decksCreated}`);
   console.log(`- Cards added: ${cardsAdded}`);
 

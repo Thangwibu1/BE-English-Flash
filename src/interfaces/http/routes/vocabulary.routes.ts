@@ -8,6 +8,7 @@ import { VocabularyModel } from '../../../infrastructure/database/mongoose/model
 import { AppError } from '../../../core/errors/AppError';
 import { normalizeText } from '../../../shared/utils/normalizeText';
 import { buildPrefixTokens } from '../../../shared/utils/buildPrefixTokens';
+import { callAIJson, ACTIVE_AI_PROVIDER } from '../../../shared/utils/aiProvider';
 
 const router = Router();
 const { vocabularyController, searchVocabularyUseCase, fuzzyVocabularySearchService } = buildContainer();
@@ -38,12 +39,8 @@ router.post('/ai-define', authMiddleware, async (req: Request, res: Response, ne
     if (!text || !text.trim()) {
       throw new AppError('BAD_REQUEST', 'Text is required', 400);
     }
-    
-    const apiKey = process.env.NINEROUTER_API_KEY || '';
-    const baseUrl = process.env.NINEROUTER_BASE_URL || 'https://api.nine-router.com/v1';
-    const model = process.env.NINEROUTER_MODEL || 'google/gemini-flash-1.5';
-    
-    const prompt = `Define the English word or phrase: "${text.trim()}". Return ONLY valid JSON.
+
+    const userPrompt = `Define the English word or phrase: "${text.trim()}". Return ONLY valid JSON.
 For this item, return this JSON shape:
 {
   "text": "${text.trim()}",
@@ -57,42 +54,11 @@ For this item, return this JSON shape:
   "exampleVi": string
 }`;
 
-    const apiRes = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a professional lexicographer and English teacher. Return ONLY valid JSON.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.3,
-      }),
-    });
-
-    if (!apiRes.ok) {
-      const errorText = await apiRes.text();
-      throw new Error(`AI Request failed: ${apiRes.status} ${errorText}`);
-    }
-
-    const data = await apiRes.json() as any;
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error('AI returned empty response');
-    }
-
-    const parsed = JSON.parse(content);
+    // Uses active provider: "${ACTIVE_AI_PROVIDER}" (change in src/shared/utils/aiProvider.ts)
+    const parsed = await callAIJson(
+      'You are a professional lexicographer and English teacher. Return ONLY valid JSON.',
+      userPrompt,
+    );
     const normalizedTextVal = normalizeText(text.trim());
     
     let vocab = await VocabularyModel.findOne({ normalizedText: normalizedTextVal, deletedAt: null });
@@ -194,13 +160,10 @@ router.post(
       let resolvedPhonetic = phonetic;
 
       // If useAi is true, fetch AI definition to enrich missing fields
+      // Active provider: change ACTIVE_AI_PROVIDER in src/shared/utils/aiProvider.ts
       if (useAi || !meanings || meanings.length === 0) {
         try {
-          const apiKey = process.env.NINEROUTER_API_KEY || '';
-          const baseUrl = process.env.NINEROUTER_BASE_URL || 'https://api.nine-router.com/v1';
-          const aiModel = process.env.NINEROUTER_MODEL || 'google/gemini-flash-1.5';
-
-          const prompt = `Define the English word or phrase: "${text.trim()}". Return ONLY valid JSON in this exact shape:
+          const aiPrompt = `Define the English word or phrase: "${text.trim()}". Return ONLY valid JSON in this exact shape:
 {
   "type": "single_word" | "compound_word" | "collocation" | "phrasal_verb" | "idiom" | "fixed_phrase",
   "level": "A1" | "A2" | "B1" | "B2" | "C1" | "C2",
@@ -213,47 +176,27 @@ router.post(
   "forms": [string]
 }`;
 
-          const aiRes = await fetch(`${baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: aiModel,
-              stream: false,
-              response_format: { type: 'json_object' },
-              messages: [
-                { role: 'system', content: 'You are a professional lexicographer. Return ONLY valid JSON.' },
-                { role: 'user', content: prompt },
-              ],
-              temperature: 0.3,
-            }),
-          });
+          const parsed = await callAIJson(
+            'You are a professional lexicographer. Return ONLY valid JSON.',
+            aiPrompt,
+          );
 
-          if (aiRes.ok) {
-            const aiData = await aiRes.json() as any;
-            const aiContent = aiData?.choices?.[0]?.message?.content;
-            if (aiContent) {
-              const parsed = JSON.parse(aiContent);
-              resolvedType = resolvedType || parsed.type || 'single_word';
-              resolvedLevel = resolvedLevel || parsed.level;
-              resolvedPartOfSpeech = resolvedPartOfSpeech || parsed.partOfSpeech;
-              resolvedPhonetic = resolvedPhonetic || parsed.phonetic;
+          resolvedType = resolvedType || parsed.type || 'single_word';
+          resolvedLevel = resolvedLevel || parsed.level;
+          resolvedPartOfSpeech = resolvedPartOfSpeech || parsed.partOfSpeech;
+          resolvedPhonetic = resolvedPhonetic || parsed.phonetic;
 
-              if (!resolvedMeanings || resolvedMeanings.length === 0) {
-                resolvedMeanings = [{
-                  meaningVi: parsed.meaningVi || 'Chưa có nghĩa',
-                  meaningEn: parsed.meaningEn,
-                  examples: parsed.exampleEn ? [{ exampleEn: parsed.exampleEn, exampleVi: parsed.exampleVi }] : [],
-                }];
-              }
+          if (!resolvedMeanings || resolvedMeanings.length === 0) {
+            resolvedMeanings = [{
+              meaningVi: parsed.meaningVi || 'Chưa có nghĩa',
+              meaningEn: parsed.meaningEn,
+              examples: parsed.exampleEn ? [{ exampleEn: parsed.exampleEn, exampleVi: parsed.exampleVi }] : [],
+            }];
+          }
 
-              // Merge AI-suggested forms with extra forms
-              if (parsed.forms && Array.isArray(parsed.forms) && (!extraForms || extraForms.length === 0)) {
-                req.body._aiForms = parsed.forms.filter((f: string) => normalizeText(f) !== normalizedTextVal);
-              }
-            }
+          // Merge AI-suggested forms with extra forms
+          if (parsed.forms && Array.isArray(parsed.forms) && (!extraForms || extraForms.length === 0)) {
+            req.body._aiForms = parsed.forms.filter((f: string) => normalizeText(f) !== normalizedTextVal);
           }
         } catch (_aiErr) {
           // AI enrichment is optional — continue without it
